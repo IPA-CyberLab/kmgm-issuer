@@ -1,0 +1,7 @@
+domain: coe.ad.jp
+repo: github.com/IPA-CyberLab/kmgm-issuer
+resources:
+- group: kmgm-issuer
+  kind: Issuer
+  version: v1beta1
+version: "2"

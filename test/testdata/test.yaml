@@ -1,0 +1,22 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: rsa4096-test
+spec:
+  secretName: rsa4096-test
+  dnsNames:
+  - rsa4096.example
+  issuerRef:
+    name: kmgm-test-issuer
+    kind: Issuer
+    group: kmgm-issuer.coe.ad.jp
+---
+apiVersion: kmgm-issuer.coe.ad.jp/v1beta1
+kind: Issuer
+metadata:
+  name: kmgm-test-issuer
+  fooLabel: barValue
+spec:
+  hostPort: 172.22.1.3:34680
+  pinnedPubKey: tsg9+P2XSOYX8V0lAeBaRjzRJDDc7Mryb5ozIej4lcc=
+  accessToken: asdffdsa
