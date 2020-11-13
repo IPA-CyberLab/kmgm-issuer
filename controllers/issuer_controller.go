@@ -111,6 +111,7 @@ func GetIssuerConnectionInfo(ctx context.Context, c client.Client, issuer *kmgmi
 
 // +kubebuilder:rbac:groups=kmgm-issuer.coe.ad.jp,resources=issuers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kmgm-issuer.coe.ad.jp,resources=issuers/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;delete
 
 func (r *IssuerReconciler) reconcileSecret(ctx context.Context, req ctrl.Request, issuer *kmgmissuerv1beta1.Issuer) (ctrl.Result, error) {
 	l := r.Log.WithValues("issuer", req.NamespacedName)
