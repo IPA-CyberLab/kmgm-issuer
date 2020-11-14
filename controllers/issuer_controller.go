@@ -284,10 +284,15 @@ func (c *issuerConditions) SetErrorState(reason string, err error) {
 
 func (r *IssuerReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	ctx := context.Background()
-	// l := r.Log.WithValues("issuer", req.NamespacedName)
+	l := r.Log.WithValues("issuer", req.NamespacedName)
 
 	var issuer kmgmissuerv1beta1.Issuer
 	if err := r.Get(ctx, req.NamespacedName, &issuer); err != nil {
+		if apierrors.IsNotFound(err) {
+			l.Error(nil, "Couldn't find the issuer.")
+			return ctrl.Result{}, nil
+		}
+
 		return ctrl.Result{}, err
 	}
 
