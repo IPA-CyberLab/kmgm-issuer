@@ -63,7 +63,9 @@ func testClient(t *testing.T) *rest.Config {
 		},
 	}
 	t.Cleanup(func() {
-		testEnv.Stop()
+		if err := testEnv.Stop(); err != nil {
+			t.Errorf("testEnv.Stop non-nil err: %v", err)
+		}
 	})
 
 	var err error
@@ -93,7 +95,7 @@ func RetryUntil(t *testing.T, deadline time.Time, f func() error) {
 	for ; time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
 		err = f()
 		if err == nil {
-			t.Logf("Took %v to satisfy condition.", time.Now().Sub(start))
+			t.Logf("Took %v to satisfy condition.", time.Since(start))
 			return
 		}
 	}
