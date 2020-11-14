@@ -32,9 +32,6 @@ import (
 	apitypes "k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	kmgmissuerv1beta1 "github.com/IPA-CyberLab/kmgm-issuer/api/v1beta1"
 	"github.com/IPA-CyberLab/kmgm/dname"
@@ -240,7 +237,7 @@ func (r *CertificateRequestReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 			if err2 := r.Status().Update(ctx, &certreq); err2 != nil {
 				return ctrl.Result{}, err
 			}
-			return ctrl.Result{}, nil
+			return ctrl.Result{RequeueAfter: time.Second}, nil
 		}
 		return ctrl.Result{}, err
 	}
@@ -249,7 +246,7 @@ func (r *CertificateRequestReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		if err := r.Status().Update(ctx, &certreq); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, nil
+		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
 	certpem, err := r.issueCertificate(ctx, &issuer, &certreq)
@@ -272,11 +269,5 @@ func (r *CertificateRequestReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 func (r *CertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&certmanageriov1.CertificateRequest{}).
-		Watches(&source.Kind{Type: &kmgmissuerv1beta1.Issuer{}}, &handler.EnqueueRequestsFromMapFunc{
-			ToRequests: handler.ToRequestsFunc(func(mo handler.MapObject) []reconcile.Request {
-				// FIXME: implement me
-				return nil
-			}),
-		}).
 		Complete(r)
 }

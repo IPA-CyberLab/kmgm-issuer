@@ -512,3 +512,39 @@ setup:
 		t.Errorf("Unexpected Issuer: %v", cert.Issuer)
 	}
 }
+
+func TestCertificateRequestBeforeIssuer(t *testing.T) {
+	ctx := context.Background()
+	env := setupEnv(t)
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("Unexpected err: %v", err)
+	}
+	env.CreateCertificateRequest(t, ctx, "cr-before-issuer", &x509.CertificateRequest{
+		Subject: pkix.Name{
+			Country:      []string{"JP"},
+			Organization: []string{"testorg"},
+			CommonName:   "testcn",
+		},
+	}, priv)
+
+	env.CreateIssuer(t, ctx, "")
+	env.WaitUntilIssuerReady(t, ctx)
+
+	certreq := env.WaitUntilCertificateRequestReady(t, ctx, "cr-before-issuer")
+
+	certpem := certreq.Status.Certificate
+	certs, err := pemparser.ParseCertificates(certpem)
+	if err != nil {
+		t.Fatalf("Unexpected err: %v", err)
+	}
+	if len(certs) != 1 {
+		t.Fatalf("Unexpected num certs: %d", len(certs))
+	}
+	cert := certs[0]
+
+	if cert.Subject.String() != "CN=testcn,O=testorg,C=JP" {
+		t.Errorf("Unexpected Subject: %v", cert.Subject)
+	}
+}
