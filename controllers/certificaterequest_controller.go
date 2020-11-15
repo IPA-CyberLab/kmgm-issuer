@@ -118,7 +118,7 @@ func (c *CertificateRequestConditions) SetReady() {
 	now := metav1.Now()
 	c.ReadyCond.Status = certmanageriometav1.ConditionTrue
 	c.ReadyCond.LastTransitionTime = &now
-	c.ReadyCond.Reason = "CertificateIssued"
+	c.ReadyCond.Reason = certmanageriov1.CertificateRequestReasonIssued
 	c.ReadyCond.Message = "Issued the requested certificate successfully"
 }
 
@@ -126,7 +126,7 @@ func (c *CertificateRequestConditions) SetErrorState(err error) {
 	now := metav1.Now()
 	c.ReadyCond.Status = certmanageriometav1.ConditionFalse
 	c.ReadyCond.LastTransitionTime = &now
-	c.ReadyCond.Reason = "Failed"
+	c.ReadyCond.Reason = certmanageriov1.CertificateRequestReasonFailed
 	c.ReadyCond.Message = err.Error()
 }
 
