@@ -99,8 +99,8 @@ func (r *CertificateRequestReconciler) ensureCertificateRequestConditions(ctx co
 			Type:               certmanageriov1.CertificateRequestConditionReady,
 			Status:             certmanageriometav1.ConditionFalse,
 			LastTransitionTime: &now,
-			Reason:             "Bootstrapping",
-			Message:            "Bootstrapping msg",
+			Reason:             certmanageriov1.CertificateRequestReasonPending,
+			Message:            "Bootstrapping",
 		})
 		condCreated = true
 	}
@@ -114,6 +114,8 @@ func (r *CertificateRequestReconciler) ensureCertificateRequestConditions(ctx co
 	return conds, ctrl.Result{}, nil
 }
 
+// SetReady sets True / Issued state as specified in:
+// https://cert-manager.io/docs/concepts/certificaterequest/#conditions
 func (c *CertificateRequestConditions) SetReady() {
 	now := metav1.Now()
 	c.ReadyCond.Status = certmanageriometav1.ConditionTrue
@@ -122,11 +124,23 @@ func (c *CertificateRequestConditions) SetReady() {
 	c.ReadyCond.Message = "Issued the requested certificate successfully"
 }
 
-func (c *CertificateRequestConditions) SetErrorState(err error) {
+// SetReady sets False / Failed state as specified in:
+// https://cert-manager.io/docs/concepts/certificaterequest/#conditions
+func (c *CertificateRequestConditions) SetFailedState(err error) {
 	now := metav1.Now()
 	c.ReadyCond.Status = certmanageriometav1.ConditionFalse
 	c.ReadyCond.LastTransitionTime = &now
 	c.ReadyCond.Reason = certmanageriov1.CertificateRequestReasonFailed
+	c.ReadyCond.Message = err.Error()
+}
+
+// SetReady sets False / Pending state as specified in:
+// https://cert-manager.io/docs/concepts/certificaterequest/#conditions
+func (c *CertificateRequestConditions) SetPendingState(err error) {
+	now := metav1.Now()
+	c.ReadyCond.Status = certmanageriometav1.ConditionFalse
+	c.ReadyCond.LastTransitionTime = &now
+	c.ReadyCond.Reason = certmanageriov1.CertificateRequestReasonPending
 	c.ReadyCond.Message = err.Error()
 }
 
@@ -214,14 +228,18 @@ func (r *CertificateRequestReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		return ctrl.Result{}, err
 	}
 
-	if len(certreq.Status.Certificate) != 0 {
-		l.Info("Ignoring since .Status.Certificate is not empty")
-		return ctrl.Result{}, nil
-	}
-
 	conds, res, err := r.ensureCertificateRequestConditions(ctx, &certreq)
 	if res.Requeue || err != nil {
 		return res, err
+	}
+
+	switch conds.ReadyCond.Reason {
+	case certmanageriov1.CertificateRequestReasonIssued,
+		certmanageriov1.CertificateRequestReasonFailed:
+		return ctrl.Result{}, nil
+
+	case certmanageriov1.CertificateRequestReasonPending:
+		break
 	}
 
 	issuerName, err := ExtractIssuerNameFromCertificateRequest(&certreq)
@@ -232,7 +250,7 @@ func (r *CertificateRequestReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 	var issuer kmgmissuerv1beta1.Issuer
 	if err := r.Get(ctx, issuerName, &issuer); err != nil {
 		if errors.IsNotFound(err) {
-			conds.SetErrorState(err)
+			conds.SetPendingState(err)
 
 			if err2 := r.Status().Update(ctx, &certreq); err2 != nil {
 				return ctrl.Result{}, err
@@ -242,7 +260,7 @@ func (r *CertificateRequestReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		return ctrl.Result{}, err
 	}
 	if !IssuerIsReady(&issuer) {
-		conds.SetErrorState(fmt.Errorf("Issuer %v is not yet ready", issuerName))
+		conds.SetPendingState(fmt.Errorf("Issuer %v is not yet ready", issuerName))
 		if err := r.Status().Update(ctx, &certreq); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -252,7 +270,7 @@ func (r *CertificateRequestReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 	certpem, err := r.issueCertificate(ctx, &issuer, &certreq)
 	if err != nil {
 		l.Error(err, "issueCertificate")
-		conds.SetErrorState(err)
+		conds.SetFailedState(err)
 	} else {
 		certreq.Status.Certificate = certpem
 		conds.SetReady()
