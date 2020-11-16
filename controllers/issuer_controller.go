@@ -38,6 +38,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -72,12 +73,23 @@ func IssuerIsReady(issuer *kmgmissuerv1beta1.Issuer) bool {
 	return cond.Status == kmgmissuerv1beta1.ConditionTrue
 }
 
+func SecretNameFromIssuerName(issuerName types.NamespacedName) types.NamespacedName {
+	return types.NamespacedName{
+		Namespace: issuerName.Namespace,
+		Name:      fmt.Sprintf("%s-kmgm-client-cert", issuerName.Name),
+	}
+	// TODO[P2]: what if len(Name) > 253
+}
+
 func GetIssuerConnectionInfo(ctx context.Context, c client.Client, issuer *kmgmissuerv1beta1.Issuer) (*remote.ConnectionInfo, error) {
 	if !IssuerIsReady(issuer) {
 		return nil, fmt.Errorf("Issuer %q is not yet ready", issuer.ObjectMeta.Name)
 	}
 
-	nname := client.ObjectKey{Namespace: issuer.ObjectMeta.Namespace, Name: issuer.ObjectMeta.Name}
+	nname := SecretNameFromIssuerName(types.NamespacedName{
+		Namespace: issuer.ObjectMeta.Namespace,
+		Name:      issuer.ObjectMeta.Name,
+	})
 
 	var secret corev1.Secret
 	if err := c.Get(ctx, nname, &secret); err != nil {
@@ -116,15 +128,17 @@ func GetIssuerConnectionInfo(ctx context.Context, c client.Client, issuer *kmgmi
 func (r *IssuerReconciler) reconcileSecret(ctx context.Context, req ctrl.Request, issuer *kmgmissuerv1beta1.Issuer) (ctrl.Result, error) {
 	l := r.Log.WithValues("issuer", req.NamespacedName)
 
+	secretName := SecretNameFromIssuerName(req.NamespacedName)
+
 	var secret corev1.Secret
-	if err := r.Get(ctx, req.NamespacedName, &secret); err != nil {
+	if err := r.Get(ctx, secretName, &secret); err != nil {
 		if !apierrors.IsNotFound(err) {
 			l.Error(err, "Failed to get secret")
 		}
 		l.V(1).Info("secret does not exist")
 
-		secret.Name = issuer.Name
-		secret.Namespace = issuer.Namespace
+		secret.Name = secretName.Name
+		secret.Namespace = secretName.Namespace
 		secret.Type = corev1.SecretTypeTLS
 		secret.Data = map[string][]byte{
 			corev1.TLSPrivateKeyKey: nil,
