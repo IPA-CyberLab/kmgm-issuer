@@ -331,6 +331,27 @@ func TestIssue(t *testing.T) {
 		if diff := cmp.Diff(cert.ExtKeyUsage, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}); diff != "" {
 			t.Errorf("Unexpected ExtKeyUsage diff: %s", diff)
 		}
+
+		capem := certreq.Status.CA
+		cacerts, err := pemparser.ParseCertificates(capem)
+		if err != nil {
+			t.Fatalf("Unexpected err: %v", err)
+		}
+		if len(cacerts) != 1 {
+			t.Fatalf("Unexpected num certs: %d", len(cacerts))
+		}
+		cacert := cacerts[0]
+
+		certpool := x509.NewCertPool()
+		certpool.AddCert(cacert)
+
+		if _, err := cert.Verify(x509.VerifyOptions{
+			Roots:       certpool,
+			KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+			CurrentTime: time.Now(),
+		}); err != nil {
+			t.Fatalf("cert verify failed: %v", err)
+		}
 	})
 
 	t.Run("2048bit RSA", func(t *testing.T) {

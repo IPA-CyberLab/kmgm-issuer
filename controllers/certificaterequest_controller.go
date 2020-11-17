@@ -144,28 +144,28 @@ func (c *CertificateRequestConditions) SetPendingState(err error) {
 	c.ReadyCond.Message = err.Error()
 }
 
-func (r *CertificateRequestReconciler) issueCertificate(ctx context.Context, issuer *kmgmissuerv1beta1.Issuer, certreq *certmanageriov1.CertificateRequest) ([]byte, error) {
+func (r *CertificateRequestReconciler) issueCertificate(ctx context.Context, issuer *kmgmissuerv1beta1.Issuer, certreq *certmanageriov1.CertificateRequest) ([]byte, []byte, error) {
 	xreq, err := pemparser.ParseCertificateRequest(certreq.Spec.Request)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse CertificateRequest PEM: %w", err)
+		return nil, nil, fmt.Errorf("failed to parse CertificateRequest PEM: %w", err)
 	}
 
 	if err := xreq.CheckSignature(); err != nil {
-		return nil, fmt.Errorf("failed to verify signature of given CSR: %w", err)
+		return nil, nil, fmt.Errorf("failed to verify signature of given CSR: %w", err)
 	}
 
 	pkixpub, err := x509.MarshalPKIXPublicKey(xreq.PublicKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal given public key: %w", err)
+		return nil, nil, fmt.Errorf("failed to marshal given public key: %w", err)
 	}
 
 	cinfo, err := GetIssuerConnectionInfo(ctx, r, issuer)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get kmgm server connection info from issuer: %w", err)
+		return nil, nil, fmt.Errorf("failed to get kmgm server connection info from issuer: %w", err)
 	}
 	conn, err := cinfo.Dial(ctx, r.ZapLog)
 	if err != nil {
-		return nil, fmt.Errorf("failed to establish connection to the kmgm server: %w", err)
+		return nil, nil, fmt.Errorf("failed to establish connection to the kmgm server: %w", err)
 	}
 	defer conn.Close()
 
@@ -181,7 +181,7 @@ func (r *CertificateRequestReconciler) issueCertificate(ctx context.Context, iss
 
 	ku, err := keyusage.FromCSR(xreq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract kmgm KeyUsage from CSR: %w", err)
+		return nil, nil, fmt.Errorf("failed to extract kmgm KeyUsage from CSR: %w", err)
 	}
 	// Specify "digital signature" and "key encipherment" by default.
 	if ku.KeyUsage == 0 {
@@ -195,7 +195,16 @@ func (r *CertificateRequestReconciler) issueCertificate(ctx context.Context, iss
 	}
 
 	sc := pb.NewCertificateServiceClient(conn)
-	resp, err := sc.IssueCertificate(ctx, &pb.IssueCertificateRequest{
+	getcertresp, err := sc.GetCertificate(ctx, &pb.GetCertificateRequest{
+		Profile:      profile,
+		SerialNumber: 0,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	caPem := pemparser.MarshalCertificateDer(getcertresp.Certificate)
+
+	issueresp, err := sc.IssueCertificate(ctx, &pb.IssueCertificateRequest{
 		PublicKey: pkixpub,
 		Subject:   dname.FromPkixName(xreq.Subject).ToProtoStruct(),
 		Names: &pb.Names{
@@ -207,10 +216,11 @@ func (r *CertificateRequestReconciler) issueCertificate(ctx context.Context, iss
 		Profile:          profile,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	issuedPem := pemparser.MarshalCertificateDer(issueresp.Certificate)
 
-	return pemparser.MarshalCertificateDer(resp.Certificate), nil
+	return caPem, issuedPem, nil
 }
 
 // Reconcile is our entrypoint for the cert-manager.io/CertificateRequest reconcile loop.
@@ -267,12 +277,13 @@ func (r *CertificateRequestReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
-	certpem, err := r.issueCertificate(ctx, &issuer, &certreq)
+	caPem, issuedPem, err := r.issueCertificate(ctx, &issuer, &certreq)
 	if err != nil {
 		l.Error(err, "issueCertificate")
 		conds.SetFailedState(err)
 	} else {
-		certreq.Status.Certificate = certpem
+		certreq.Status.Certificate = issuedPem
+		certreq.Status.CA = caPem
 		conds.SetReady()
 	}
 
