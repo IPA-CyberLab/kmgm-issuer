@@ -1,0 +1,14 @@
+apiVersion: v1
+entries:
+  kmgm-issuer:
+  - apiVersion: v2
+    appVersion: v0.2.3
+    created: "2020-11-19T14:58:03.447009098Z"
+    description: A Helm chart for Kubernetes
+    digest: fd61f0bdf65edcba629c5a7cb73b11f58e60e8401617237587ede5ad450eab34
+    name: kmgm-issuer
+    type: application
+    urls:
+    - https://github.com/IPA-CyberLab/kmgm-issuer/releases/download/kmgm-issuer-helm-chart-0.2.3/kmgm-issuer-0.2.3.tgz
+    version: 0.2.3
+generated: "2020-11-19T14:58:03.276852491Z"
