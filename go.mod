@@ -5,7 +5,7 @@ go 1.15
 require (
 	github.com/IPA-CyberLab/kmgm v0.2.3
 	github.com/go-logr/logr v0.3.0
-	github.com/go-logr/zapr v0.3.0
+	github.com/go-logr/zapr v0.4.0
 	github.com/google/go-cmp v0.5.4
 	github.com/jetstack/cert-manager v1.1.0
 	github.com/prometheus/common v0.15.0
