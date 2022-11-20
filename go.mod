@@ -10,7 +10,7 @@ require (
 	github.com/jetstack/cert-manager v1.1.0
 	github.com/prometheus/common v0.15.0
 	go.uber.org/multierr v1.6.0
-	go.uber.org/zap v1.16.0
+	go.uber.org/zap v1.23.0
 	k8s.io/api v0.20.1
 	k8s.io/apimachinery v0.20.1
 	k8s.io/client-go v0.20.1
