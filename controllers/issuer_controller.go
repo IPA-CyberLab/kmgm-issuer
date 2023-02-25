@@ -31,7 +31,6 @@ import (
 	"github.com/IPA-CyberLab/kmgm/storage"
 	"github.com/IPA-CyberLab/kmgm/wcrypto"
 	"github.com/go-logr/logr"
-	"github.com/prometheus/common/log"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
@@ -146,11 +145,11 @@ func (r *IssuerReconciler) reconcileSecret(ctx context.Context, req ctrl.Request
 		}
 
 		if err := ctrl.SetControllerReference(issuer, &secret, r.Scheme); err != nil {
-			log.Error(err, "unable to set secret's controller ref")
+			l.Error(err, "unable to set secret's controller ref")
 			return ctrl.Result{}, err
 		}
 		if err := r.Create(ctx, &secret); err != nil {
-			log.Error(err, "unable to create secret")
+			l.Error(err, "unable to create secret")
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -222,7 +221,7 @@ func (r *IssuerReconciler) reconcileSecret(ctx context.Context, req ctrl.Request
 	}
 	if secretModified {
 		if err := r.Update(ctx, &secret); err != nil {
-			log.Error(err, "unable to create secret")
+			l.Error(err, "unable to create secret")
 			return ctrl.Result{}, err
 		}
 		l.V(1).Info("Requeuing after secret gen")
