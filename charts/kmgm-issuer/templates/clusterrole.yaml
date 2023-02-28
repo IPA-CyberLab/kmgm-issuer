@@ -10,56 +10,5 @@ metadata:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 rules:
-- apiGroups:
-  - cert-manager.io
-  resources:
-  - certificaterequests
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - cert-manager.io
-  resources:
-  - certificaterequests/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - kmgm-issuer.coe.ad.jp
-  resources:
-  - issuers
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - kmgm-issuer.coe.ad.jp
-  resources:
-  - issuers/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - ""
-  resources:
-  - secrets
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - update
-  - watch
----
+{{ (.Files.Get "controller-gen/role.yaml" | fromYaml).rules | toYaml }}
 {{- end }}

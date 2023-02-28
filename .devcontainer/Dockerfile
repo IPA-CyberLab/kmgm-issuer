@@ -6,6 +6,7 @@ RUN curl -L "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/st
 RUN mkdir /opt/protoc && cd /opt/protoc && \
   curl -L -O https://github.com/protocolbuffers/protobuf/releases/download/v22.0/protoc-22.0-linux-x86_64.zip && \
   unzip *.zip
+RUN curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
 USER vscode
 RUN curl -sS https://webinstall.dev/k9s | bash

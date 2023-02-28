@@ -1,0 +1,18 @@
+apiVersion: skaffold/v2beta27
+kind: Config
+metadata:
+  name: kmgm-issuer
+build:
+  artifacts:
+  - image: ghcr.io/ipa-cyberlab/kmgm-issuer
+    ko:
+      main: ./
+  tagPolicy:
+    sha256: {}
+deploy:
+  helm:
+    releases:
+    - name: kmgm-issuer
+      namespace: kmgm-issuer
+      chartPath: ./charts/kmgm-issuer
+      recreatePods: true
