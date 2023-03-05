@@ -295,8 +295,7 @@ func (c *issuerConditions) SetErrorState(reason string, err error) {
 	c.ReadyCond.Message = err.Error()
 }
 
-func (r *IssuerReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	ctx := context.Background()
+func (r *IssuerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := r.Log.WithValues("issuer", req.NamespacedName)
 
 	var issuer kmgmissuerv1beta1.Issuer

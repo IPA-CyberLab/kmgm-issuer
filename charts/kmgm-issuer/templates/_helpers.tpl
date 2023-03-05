@@ -1,7 +1,7 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "kmgm-issuer.name" -}}
+{{- define "kmgm.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
@@ -10,7 +10,7 @@ Create a default fully qualified app name.
 We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
 If release name contains chart name it will be used as a full name.
 */}}
-{{- define "kmgm-issuer.fullname" -}}
+{{- define "kmgm.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -26,16 +26,16 @@ If release name contains chart name it will be used as a full name.
 {{/*
 Create chart name and version as used by the chart label.
 */}}
-{{- define "kmgm-issuer.chart" -}}
+{{- define "kmgm.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Common labels
 */}}
-{{- define "kmgm-issuer.labels" -}}
-helm.sh/chart: {{ include "kmgm-issuer.chart" . }}
-{{ include "kmgm-issuer.selectorLabels" . }}
+{{- define "kmgm.labels" -}}
+helm.sh/chart: {{ include "kmgm.chart" . }}
+{{ include "kmgm.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
@@ -45,8 +45,8 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/*
 Selector labels
 */}}
-{{- define "kmgm-issuer.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "kmgm-issuer.name" . }}
+{{- define "kmgm.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "kmgm.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
@@ -55,20 +55,30 @@ Create the name of the service account to use
 */}}
 {{- define "kmgm-issuer.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
-{{- default (include "kmgm-issuer.fullname" .) .Values.serviceAccount.name }}
+{{- default (printf "%s-issuer" (include "kmgm.fullname" .) | trunc 63) .Values.serviceAccount.name }}
 {{- else }}
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
-
 
 {{/*
 Create the name of the cluster role to use
 */}}
 {{- define "kmgm-issuer.clusterRoleName" -}}
 {{- if .Values.clusterRole.create }}
-{{- default (include "kmgm-issuer.fullname" .) .Values.clusterRole.name }}
+{{- default (printf "%s-issuer" (include "kmgm.fullname" .) | trunc 63) .Values.clusterRole.name }}
 {{- else }}
 {{- default "default" .Values.clusterRole.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Create the name of the bootstrap token secret to use
+*/}}
+{{- define "kmgm.tokenSecretName" -}}
+{{- if .Values.kmgm.bootstrap.secret.create }}
+{{- default (printf "%s-bootstrap-token" (include "kmgm.fullname" .) | trunc 63) .Values.kmgm.bootstrap.secret.name }}
+{{- else }}
+{{- default "default" .Values.kmgm.bootstrap.secret.name }}
 {{- end }}
 {{- end }}

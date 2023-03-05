@@ -7,19 +7,24 @@ build:
   - image: ghcr.io/ipa-cyberlab/kmgm-issuer
     ko:
       main: ./
+  - image: ghcr.io/ipa-cyberlab/kmgm
+    ko:
+      main: github.com/IPA-CyberLab/kmgm/cmd/kmgm
   tagPolicy:
     sha256: {}
 manifests:
   helm:
     releases:
-    - name: kmgm-issuer
+    - name: kmgm
       chartPath: ./charts/kmgm-issuer
-      namespace: kmgm-issuer
+      namespace: kmgm
       recreatePods: true
 deploy:
   helm:
     releases:
-    - name: kmgm-issuer
+    - name: kmgm
       setValueTemplates:
-        image.repository: "{{.IMAGE_REPO_ghcr_io_ipa_cyberlab_kmgm-issuer}}"
-        image.tag: "{{.IMAGE_TAG_ghcr_io_ipa_cyberlab_kmgm}}@{{.IMAGE_DIGEST_ghcr_io_ipa_cyberlab_kmgm}}"
+        issuer.image.repository: "{{.IMAGE_REPO_ghcr_io_ipa_cyberlab_kmgm-issuer}}"
+        issuer.image.tag: "{{.IMAGE_TAG_ghcr_io_ipa_cyberlab_kmgm-issuer}}@{{.IMAGE_DIGEST_ghcr_io_ipa_cyberlab_kmgm-issuer}}"
+        kmgm.image.repository: "{{.IMAGE_REPO_ghcr_io_ipa_cyberlab_kmgm}}"
+        kmgm.image.tag: "{{.IMAGE_TAG_ghcr_io_ipa_cyberlab_kmgm}}@{{.IMAGE_DIGEST_ghcr_io_ipa_cyberlab_kmgm}}"

@@ -22,9 +22,9 @@ import (
 	"fmt"
 	"time"
 
+	certmanageriov1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	certmanageriometav1 "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	"github.com/go-logr/logr"
-	certmanageriov1 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	certmanageriometav1 "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
 	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -159,7 +159,7 @@ func (r *CertificateRequestReconciler) issueCertificate(ctx context.Context, iss
 		return nil, nil, fmt.Errorf("failed to marshal given public key: %w", err)
 	}
 
-	cinfo, err := GetIssuerConnectionInfo(ctx, r, issuer)
+	cinfo, err := GetIssuerConnectionInfo(ctx, r.Client, issuer)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get kmgm server connection info from issuer: %w", err)
 	}
@@ -224,8 +224,7 @@ func (r *CertificateRequestReconciler) issueCertificate(ctx context.Context, iss
 }
 
 // Reconcile is our entrypoint for the cert-manager.io/CertificateRequest reconcile loop.
-func (r *CertificateRequestReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	ctx := context.Background()
+func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := r.Log.WithValues("certificaterequest", req.NamespacedName)
 
 	var certreq certmanageriov1.CertificateRequest
