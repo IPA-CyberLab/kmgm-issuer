@@ -13,8 +13,7 @@ If release name contains chart name it will be used as a full name.
 {{- define "kmgm.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
-{{- else }}
-{{- $name := default .Chart.Name .Values.nameOverride }}
+{{- else }} {{- $name := default .Chart.Name .Values.nameOverride }}
 {{- if contains $name .Release.Name }}
 {{- .Release.Name | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -81,4 +80,20 @@ Create the name of the bootstrap token secret to use
 {{- else }}
 {{- default "default" .Values.kmgm.bootstrap.secret.name }}
 {{- end }}
+{{- end }}
+
+{{/*
+Create bootstrap token
+*/}}
+{{- define "kmgm.bootstrapToken" -}}
+{{- if .Values.kmgm.bootstrap.token -}}
+{{-   .Values.kmgm.bootstrap.token -}}
+{{- else -}}
+{{-   $previous := lookup "v1" "Secret" .Release.Namespace (include "kmgm.tokenSecretName" .) }}
+{{-   if $previous -}}
+{{-     $previous.data.token | b64dec -}}
+{{-   else -}}
+{{-     randAlphaNum 32 -}}
+{{-   end -}}
+{{- end -}}
 {{- end }}
