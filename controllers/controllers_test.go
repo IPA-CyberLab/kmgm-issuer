@@ -102,7 +102,7 @@ func RetryUntil(t *testing.T, deadline time.Time, f func() error) {
 	t.Errorf("Failed to satisfy condition: %v", err)
 }
 
-func runManager(t *testing.T, cfg *rest.Config, logger *zap.Logger) chan struct{} {
+func runManager(ctx context.Context, t *testing.T, cfg *rest.Config, logger *zap.Logger) {
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{})
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
@@ -123,22 +123,18 @@ func runManager(t *testing.T, cfg *rest.Config, logger *zap.Logger) chan struct{
 	}).SetupWithManager(mgr); err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	closeCh := make(chan struct{})
 	go func() {
-		if err := mgr.Start(closeCh); err != nil {
+		if err := mgr.Start(ctx); err != nil {
 			t.Logf("unexpected err: %v", err)
 		}
 	}()
 	t.Logf("mgr start")
-
-	return closeCh
 }
 
 type Env struct {
 	testserver *testserver.TestServer
 	logger     *testlogger.TestLogger
 	cli        client.Client
-	closeCh    chan struct{}
 }
 
 func setupEnv(t *testing.T) *Env {
@@ -156,7 +152,9 @@ func setupEnv(t *testing.T) *Env {
 
 	cfg := testClient(t)
 
-	closeCh := runManager(t, cfg, logger.Logger)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	runManager(ctx, t, cfg, logger.Logger)
 
 	cli, err := client.New(cfg, client.Options{Scheme: scheme.Scheme})
 	if err != nil {
@@ -167,13 +165,8 @@ func setupEnv(t *testing.T) *Env {
 		testserver: ts,
 		logger:     logger,
 		cli:        cli,
-		closeCh:    closeCh,
 	}
-	t.Cleanup(func() {
-		if e.closeCh != nil {
-			close(closeCh)
-		}
-	})
+	t.Cleanup(cancel)
 	return e
 }
 

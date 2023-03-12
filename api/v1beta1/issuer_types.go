@@ -62,7 +62,7 @@ const (
 	ConditionUnknown ConditionStatus = "Unknown"
 )
 
-// IssuerCondition contains conditino information for an Issuer
+// IssuerCondition contains condition information for an Issuer.
 type IssuerCondition struct {
 	Type IssuerConditionType `json:"type"`
 
@@ -88,6 +88,10 @@ type IssuerCondition struct {
 // IssuerStatus defines the observed state of Issuer
 type IssuerStatus struct {
 	Conditions []IssuerCondition `json:"conditions,omitempty"`
+
+	// PubKey is the SHA256 hash of the kmgm CA server certificate, used to
+	// ensure that the server the issuer is talking to is consistent.
+	PubKey string `json:"pubKey,omitempty"`
 }
 
 // +kubebuilder:object:root=true

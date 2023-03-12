@@ -55,7 +55,7 @@
 		"source=${env:HOME}${env:USERPROFILE}/.kube,target=/home/vscode/.kube,type=bind",
 		"source=${env:HOME}${env:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind,readonly",
 		"source=${env:HOME}${env:USERPROFILE}/.vault.pw,target=/home/vscode/.vault.pw,type=bind,readonly",
-		"source=${env:HOME}${env:USERPROFILE}/worksp/htdi-bpf,target=/workspaces/htdi-bpf,type=bind",
+		"source=${env:HOME}${env:USERPROFILE}/worksp/kmgm,target=/workspaces/kmgm,type=bind",
 		// docker-from-docker
 		"source=/var/run/docker.sock,target=/var/run/docker-host.sock,type=bind",
 	],

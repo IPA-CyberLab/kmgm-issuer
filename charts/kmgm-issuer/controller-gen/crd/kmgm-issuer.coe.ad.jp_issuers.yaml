@@ -59,8 +59,8 @@ spec:
             properties:
               conditions:
                 items:
-                  description: IssuerCondition contains conditino information for
-                    an Issuer
+                  description: IssuerCondition contains condition information for
+                    an Issuer.
                   properties:
                     lastTransitionTime:
                       description: LastTransitionTime is the timestamp corresponding
@@ -92,6 +92,10 @@ spec:
                   - type
                   type: object
                 type: array
+              pubKey:
+                description: PubKey is the SHA256 hash of the kmgm CA server certificate,
+                  used to ensure that the server the issuer is talking to is consistent.
+                type: string
             type: object
         type: object
     served: true

@@ -113,16 +113,67 @@ func GetIssuerConnectionInfo(ctx context.Context, c client.Client, issuer *kmgmi
 
 	cinfo := &remote.ConnectionInfo{
 		HostPort:              issuer.Spec.HostPort,
-		PinnedPubKey:          issuer.Spec.PinnedPubKey,
 		ClientPrivateKeyFile:  storage.InlinePrefix + string(pkeypem),
 		ClientCertificateFile: storage.InlinePrefix + string(certpem),
 	}
+	if issuer.Spec.PinnedPubKey == "" {
+		if issuer.Status.PubKey == "" {
+			cinfo.AllowInsecure = true
+		} else {
+			cinfo.PinnedPubKey = issuer.Status.PubKey
+		}
+	} else {
+		cinfo.PinnedPubKey = issuer.Spec.PinnedPubKey
+	}
+
 	return cinfo, nil
 }
 
 // +kubebuilder:rbac:groups=kmgm-issuer.coe.ad.jp,resources=issuers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kmgm-issuer.coe.ad.jp,resources=issuers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;delete
+
+func (r *IssuerReconciler) pinPubKey(ctx context.Context, req ctrl.Request, issuer *kmgmissuerv1beta1.Issuer) (ctrl.Result, error) {
+	l := r.Log.WithValues("issuer", req.NamespacedName)
+
+	if issuer.Status.PubKey != "" {
+		// kmgm server public key already pinned. return.
+		return ctrl.Result{}, nil
+	}
+
+	if issuer.Spec.PinnedPubKey != "" {
+		// Pin kmgm server public key to specified.
+		issuer.Status.PubKey = issuer.Spec.PinnedPubKey
+	} else {
+		cinfo := &remote.ConnectionInfo{
+			HostPort:      issuer.Spec.HostPort,
+			AllowInsecure: true,
+			AccessToken:   issuer.Spec.AccessToken,
+		}
+		conn, pubkeys, err := cinfo.DialPubKeys(ctx, r.ZapLog)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		defer conn.Close()
+
+		sc := pb.NewVersionServiceClient(conn)
+		resp, err := sc.GetVersion(ctx, &pb.GetVersionRequest{})
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+
+		l.Info("kmgm server version: %s, commit: %s", resp.Version, resp.Commit)
+
+		// Take first pubkey from `pubkeys`.
+		for pubkey, _ := range pubkeys {
+			issuer.Status.PubKey = pubkey
+			break
+		}
+	}
+
+	l.V(1).Info("Requeuing after pinning kmgm server pubkey")
+	return ctrl.Result{Requeue: true}, nil
+}
 
 func (r *IssuerReconciler) reconcileSecret(ctx context.Context, req ctrl.Request, issuer *kmgmissuerv1beta1.Issuer) (ctrl.Result, error) {
 	l := r.Log.WithValues("issuer", req.NamespacedName)
@@ -191,9 +242,10 @@ func (r *IssuerReconciler) reconcileSecret(ctx context.Context, req ctrl.Request
 			}
 
 			cinfo := &remote.ConnectionInfo{
-				HostPort:     issuer.Spec.HostPort,
-				PinnedPubKey: issuer.Spec.PinnedPubKey,
-				AccessToken:  issuer.Spec.AccessToken,
+				HostPort:      issuer.Spec.HostPort,
+				PinnedPubKey:  issuer.Spec.PinnedPubKey,
+				AllowInsecure: issuer.Spec.PinnedPubKey == "",
+				AccessToken:   issuer.Spec.AccessToken,
 			}
 			conn, err := cinfo.Dial(ctx, r.ZapLog)
 			if err != nil {
@@ -279,12 +331,12 @@ func (c *issuerConditions) SetReady() {
 	c.ReadyCond.Message = "Bootstrapped issuer successfully"
 }
 
-func (c *issuerConditions) SetInProgress() {
+func (c *issuerConditions) SetInProgress(msg string) {
 	now := metav1.Now()
 	c.ReadyCond.Status = kmgmissuerv1beta1.ConditionFalse
 	c.ReadyCond.LastTransitionTime = &now
 	c.ReadyCond.Reason = "InProgress"
-	c.ReadyCond.Message = "Bootstrapping Issuer"
+	c.ReadyCond.Message = msg
 }
 
 func (c *issuerConditions) SetErrorState(reason string, err error) {
@@ -313,6 +365,23 @@ func (r *IssuerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return res, err
 	}
 
+	if res, err := r.pinPubKey(ctx, req, &issuer); err != nil {
+		conds.SetErrorState("PinPubKeyFailure", err)
+
+		if errU := r.Status().Update(ctx, &issuer); errU != nil {
+			return ctrl.Result{}, multierr.Append(err, errU)
+		}
+
+		return ctrl.Result{}, err
+	} else if res.Requeue {
+		conds.SetInProgress("Pinned PubKey")
+
+		if errU := r.Status().Update(ctx, &issuer); errU != nil {
+			return ctrl.Result{}, errU
+		}
+		return res, nil
+	}
+
 	if res, err := r.reconcileSecret(ctx, req, &issuer); err != nil {
 		conds.SetErrorState("ClientCertificateFailure", err)
 
@@ -321,7 +390,7 @@ func (r *IssuerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 		return ctrl.Result{}, err
 	} else if res.Requeue {
-		conds.SetInProgress()
+		conds.SetInProgress("Preparing Secret")
 
 		if errU := r.Status().Update(ctx, &issuer); errU != nil {
 			return ctrl.Result{}, errU

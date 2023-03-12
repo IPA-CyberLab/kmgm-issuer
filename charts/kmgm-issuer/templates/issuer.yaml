@@ -4,4 +4,5 @@ metadata:
   name: {{ include "kmgm.fullname" . }}
 spec:
   hostPort: {{ include "kmgm.fullname" . }}:34680
+  pinnedPubKey: "" # empty == pin server pubkey on first conn.
   accessToken: {{ include "kmgm.bootstrapToken" . }}
