@@ -17,6 +17,17 @@ rules:
   - update
   - watch
 - apiGroups:
+  - apps
+  resources:
+  - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
   - cert-manager.io
   resources:
   - certificaterequests
@@ -52,6 +63,26 @@ rules:
   - kmgm-issuer.coe.ad.jp
   resources:
   - issuers/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - kmgm-issuer.coe.ad.jp
+  resources:
+  - kmgms
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kmgm-issuer.coe.ad.jp
+  resources:
+  - kmgms/status
   verbs:
   - get
   - patch

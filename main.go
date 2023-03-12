@@ -31,7 +31,6 @@ import (
 
 	kmgmissuerv1beta1 "github.com/IPA-CyberLab/kmgm-issuer/api/v1beta1"
 	"github.com/IPA-CyberLab/kmgm-issuer/controllers"
-	// +kubebuilder:scaffold:imports
 )
 
 var (
@@ -44,7 +43,6 @@ func init() {
 
 	_ = kmgmissuerv1beta1.AddToScheme(scheme)
 	_ = certmanageriov1.AddToScheme(scheme)
-	// +kubebuilder:scaffold:scheme
 }
 
 func main() {
@@ -98,7 +96,15 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "Issuer")
 		os.Exit(1)
 	}
-	// +kubebuilder:scaffold:builder
+	if err = (&controllers.KmgmReconciler{
+		Client: mgr.GetClient(),
+		Log:    ctrl.Log.WithName("controllers").WithName("Issuer"),
+		ZapLog: rawzap,
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Issuer")
+		os.Exit(1)
+	}
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {

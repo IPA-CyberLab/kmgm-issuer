@@ -1,0 +1,8 @@
+apiVersion: kmgm-issuer.coe.ad.jp/v1beta1
+kind: Kmgm
+metadata:
+  name: {{ include "kmgm.fullname" . }}
+spec:
+  kmgmProfileSelector:
+    matchLabels:
+      {{- include "kmgm.selectorLabels" . | nindent 6 }}
