@@ -3,7 +3,7 @@ kmgm:
     repository: ghcr.io/ipa-cyberlab/kmgm
     pullPolicy: IfNotPresent
     # Overrides the image tag whose default is the chart appVersion.
-    tag: ""
+    tag: latest
 
   bootstrap:
     token: ""
@@ -17,13 +17,13 @@ issuer:
     repository: ghcr.io/ipa-cyberlab/kmgm-issuer
     pullPolicy: IfNotPresent
     # Overrides the image tag whose default is the chart appVersion.
-    tag: ""
+    tag: latest
 
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
-installCRDs: true
+installCRDs: false
 
 serviceAccount:
   # Specifies whether a service account should be created

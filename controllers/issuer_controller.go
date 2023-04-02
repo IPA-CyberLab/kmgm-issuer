@@ -179,6 +179,7 @@ func (r *IssuerReconciler) reconcileSecret(ctx context.Context, req ctrl.Request
 	var secret corev1.Secret
 	if err := r.Get(ctx, secretName, &secret); err != nil {
 		if !apierrors.IsNotFound(err) {
+			// FIXME: why l.Error instead of return err? here and below?
 			l.Error(err, "Failed to get secret")
 		}
 		l.V(1).Info("secret does not exist")
@@ -269,7 +270,7 @@ func (r *IssuerReconciler) reconcileSecret(ctx context.Context, req ctrl.Request
 	}
 	if secretModified {
 		if err := r.Update(ctx, &secret); err != nil {
-			l.Error(err, "unable to create secret")
+			l.Error(err, "unable to update secret")
 			return ctrl.Result{}, err
 		}
 		l.V(1).Info("Requeuing after secret gen")

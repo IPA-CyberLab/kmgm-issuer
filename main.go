@@ -71,10 +71,10 @@ func main() {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
-	if mgr.AddReadyzCheck("ping", healthz.Ping); err != nil {
+	if err := mgr.AddReadyzCheck("ping", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to setup ReadyzCheck")
 	}
-	if mgr.AddHealthzCheck("ping", healthz.Ping); err != nil {
+	if err := mgr.AddHealthzCheck("ping", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to setup HealthzCheck")
 	}
 
@@ -98,11 +98,11 @@ func main() {
 	}
 	if err = (&controllers.KmgmReconciler{
 		Client: mgr.GetClient(),
-		Log:    ctrl.Log.WithName("controllers").WithName("Issuer"),
+		Log:    ctrl.Log.WithName("controllers").WithName("Kmgm"),
 		ZapLog: rawzap,
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Issuer")
+		setupLog.Error(err, "unable to create controller", "controller", "Kmgm")
 		os.Exit(1)
 	}
 

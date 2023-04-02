@@ -35,6 +35,9 @@ spec:
           spec:
             description: KmgmSpec defines the desired state of Kmgm
             properties:
+              image:
+                description: Kmgm container image to be deployed to the pods.
+                type: string
               kmgmProfileSelector:
                 description: KmgmProfiles to be selected to be assigned to this Kmgm
                   insntance.

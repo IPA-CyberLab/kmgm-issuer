@@ -3,6 +3,7 @@ kind: Kmgm
 metadata:
   name: {{ include "kmgm.fullname" . }}
 spec:
+  image: "{{ .Values.kmgm.image.repository }}:{{ .Values.kmgm.image.tag | default .Chart.AppVersion }}"
   kmgmProfileSelector:
     matchLabels:
       {{- include "kmgm.selectorLabels" . | nindent 6 }}
