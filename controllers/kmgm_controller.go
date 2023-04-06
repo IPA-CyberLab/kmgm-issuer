@@ -64,6 +64,14 @@ type kmgmConditions struct {
 	ReadyCond *kmgmissuerv1beta1.KmgmCondition
 }
 
+func (c *kmgmConditions) SetReady() {
+	now := metav1.Now()
+	c.ReadyCond.Status = kmgmissuerv1beta1.ConditionTrue
+	c.ReadyCond.LastTransitionTime = &now
+	c.ReadyCond.Reason = "KmgmReady"
+	c.ReadyCond.Message = "Kmgm bootstrapped successfully."
+}
+
 func (c *kmgmConditions) SetInProgress(msg string) {
 	now := metav1.Now()
 	c.ReadyCond.Status = kmgmissuerv1beta1.ConditionFalse
@@ -136,6 +144,10 @@ func serviceNameFromKmgmName(kmgmName types.NamespacedName) types.NamespacedName
 	return statefulSetNameFromKmgmName(kmgmName)
 }
 
+func issuerNameFromKmgmName(kmgmName types.NamespacedName) types.NamespacedName {
+	return kmgmName
+}
+
 func (r *KmgmReconciler) createBootstrapSecret(ctx context.Context, kmgm *kmgmissuerv1beta1.Kmgm) error {
 	nn := types.NamespacedName{
 		Namespace: kmgm.ObjectMeta.Namespace,
@@ -170,7 +182,7 @@ func (r *KmgmReconciler) createBootstrapSecret(ctx context.Context, kmgm *kmgmis
 	return nil
 }
 
-func (r *KmgmReconciler) reconcileSecret(ctx context.Context, kmgm *kmgmissuerv1beta1.Kmgm) (ctrl.Result, error) {
+func (r *KmgmReconciler) reconcileSecret(ctx context.Context, kmgm *kmgmissuerv1beta1.Kmgm) (ctrl.Result, string, error) {
 	nn := types.NamespacedName{
 		Namespace: kmgm.ObjectMeta.Namespace,
 		Name:      kmgm.ObjectMeta.Name,
@@ -186,20 +198,25 @@ func (r *KmgmReconciler) reconcileSecret(ctx context.Context, kmgm *kmgmissuerv1
 	var bootstrapSecret corev1.Secret
 	if err := r.Client.Get(ctx, secretName, &bootstrapSecret); err != nil {
 		if !apierrors.IsNotFound(err) {
-			return RetryAfterDelay, fmt.Errorf("Failed to get Secret: %w", err)
+			return RetryAfterDelay, "", fmt.Errorf("Failed to get Secret: %w", err)
 		}
 
 		if err := r.createBootstrapSecret(ctx, kmgm); err != nil {
 			l.Error(err, "unable to create secret")
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{Requeue: true}, "", nil
 	}
 
 	// ensure data.token
 	tokenbs := bootstrapSecret.Data["token"]
-	if len(tokenbs) == 0 {
+
+	var bootstrapToken string
+	if len(tokenbs) > 0 {
+		bootstrapToken = string(tokenbs)
+	}
+	if bootstrapToken == "" {
 		if token, err := wcrypto.GenBase64Token(rand.Reader, r.ZapLog); err != nil {
-			return RetryAfterDelay, fmt.Errorf("Failed to generate bootstrap token: %w", err)
+			return RetryAfterDelay, "", fmt.Errorf("Failed to generate bootstrap token: %w", err)
 		} else {
 			if bootstrapSecret.StringData == nil {
 				bootstrapSecret.StringData = make(map[string]string)
@@ -207,13 +224,13 @@ func (r *KmgmReconciler) reconcileSecret(ctx context.Context, kmgm *kmgmissuerv1
 			bootstrapSecret.StringData["token"] = token
 
 			if err := r.Client.Update(ctx, &bootstrapSecret); err != nil {
-				return RetryAfterDelay, fmt.Errorf("Failed to update Secret: %w", err)
+				return RetryAfterDelay, "", fmt.Errorf("Failed to update Secret: %w", err)
 			}
-			return ctrl.Result{Requeue: true}, nil
+			return ctrl.Result{Requeue: true}, "", nil
 		}
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, bootstrapToken, nil
 }
 
 var persistentVolumeFilesystem = corev1.PersistentVolumeFilesystem
@@ -426,11 +443,11 @@ func (r *KmgmReconciler) reconcileService(ctx context.Context, kmgm *kmgmissuerv
 		svc.Spec = makeServiceSpec(kmgm)
 
 		if err := ctrl.SetControllerReference(kmgm, &svc, r.Scheme); err != nil {
-			l.Error(err, "unable to set statefulset's controller ref")
+			l.Error(err, "unable to set service's controller ref")
 			return ctrl.Result{}, err
 		}
 		if err := r.Create(ctx, &svc); err != nil {
-			l.Error(err, "unable to create statefulset")
+			l.Error(err, "unable to create Service")
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -446,7 +463,77 @@ func (r *KmgmReconciler) reconcileService(ctx context.Context, kmgm *kmgmissuerv
 	svc.Spec.Ports = newSpec.Ports
 	svc.Spec.Selector = newSpec.Selector
 	if err := r.Update(ctx, &svc); err != nil {
-		return ctrl.Result{}, fmt.Errorf("unable to update statefulset: %w", err)
+		return ctrl.Result{}, fmt.Errorf("unable to update Service: %w", err)
+	}
+
+	return ctrl.Result{}, nil
+}
+
+func makeIssuerSpec(kmgm *kmgmissuerv1beta1.Kmgm, bootstrapToken string) kmgmissuerv1beta1.IssuerSpec {
+	nn := types.NamespacedName{
+		Namespace: kmgm.ObjectMeta.Namespace,
+		Name:      kmgm.ObjectMeta.Name,
+	}
+	svcName := serviceNameFromKmgmName(nn)
+
+	return kmgmissuerv1beta1.IssuerSpec{
+		HostPort:     fmt.Sprintf("%s:34680", svcName.Name),
+		PinnedPubKey: "", // empty == pin server pubkey on first conn.
+		AccessToken:  bootstrapToken,
+	}
+}
+
+func (r *KmgmReconciler) reconcileIssuer(ctx context.Context, kmgm *kmgmissuerv1beta1.Kmgm, bootstrapToken string) (ctrl.Result, error) {
+	nn := types.NamespacedName{
+		Namespace: kmgm.ObjectMeta.Namespace,
+		Name:      kmgm.ObjectMeta.Name,
+	}
+	l := r.Log.WithValues("kmgm", nn)
+	l.Info("reconcileIssuer start")
+	defer func() {
+		l.Info("reconcileIssuer end")
+	}()
+
+	issuerName := issuerNameFromKmgmName(nn)
+	var issuer kmgmissuerv1beta1.Issuer
+	if err := r.Client.Get(ctx, issuerName, &issuer); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return ctrl.Result{Requeue: true}, fmt.Errorf("Failed to get Issuer: %w", err)
+		}
+
+		l.V(1).Info("Issuer does not exist")
+		issuer.ObjectMeta = metav1.ObjectMeta{
+			Namespace: issuerName.Namespace,
+			Name:      issuerName.Name,
+			Labels: map[string]string{
+				"app.kubernetes.io/component":  "kmgm",
+				"app.kubernetes.io/managed-by": "kmgm-issuer",
+				"kmgm-issuer.coe.ad.jp/kmgm":   kmgm.Name,
+			},
+			// FIXME: copy labels+annotations (but maybe not those w/ kubectl.kubernetes.io: https://github.com/prometheus-operator/prometheus-operator/blob/16dfbf448ff439907daaa8c58a3b388e1060106f/pkg/alertmanager/statefulset.go#L125)
+		}
+		issuer.Spec = makeIssuerSpec(kmgm, bootstrapToken)
+
+		if err := ctrl.SetControllerReference(kmgm, &issuer, r.Scheme); err != nil {
+			l.Error(err, "unable to set issuer's controller ref")
+			return ctrl.Result{}, err
+		}
+		if err := r.Create(ctx, &issuer); err != nil {
+			l.Error(err, "unable to create issuer")
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	newSpec := makeIssuerSpec(kmgm, bootstrapToken)
+	diff := cmp.Diff(&newSpec, &issuer.Spec)
+	if diff == "" {
+		// Nothing to do.
+		return ctrl.Result{}, nil
+	}
+
+	issuer.Spec = newSpec
+	if err := r.Update(ctx, &issuer); err != nil {
+		return ctrl.Result{}, fmt.Errorf("unable to update Issuer: %w", err)
 	}
 
 	return ctrl.Result{}, nil
@@ -471,7 +558,8 @@ func (r *KmgmReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 	_ = conds
 
-	if res, err := r.reconcileSecret(ctx, &kmgm); err != nil {
+	res, bootstrapToken, err := r.reconcileSecret(ctx, &kmgm)
+	if err != nil {
 		conds.SetErrorState("Secret failure", err)
 
 		if errU := r.Status().Update(ctx, &kmgm); errU != nil {
@@ -519,7 +607,29 @@ func (r *KmgmReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return res, nil
 	}
 
-	// FIXME: set ready
+	if res, err := r.reconcileIssuer(ctx, &kmgm, bootstrapToken); err != nil {
+		conds.SetErrorState("Issuer failure", err)
+
+		if errU := r.Status().Update(ctx, &kmgm); errU != nil {
+			return ctrl.Result{}, multierr.Append(err, errU)
+		}
+		return ctrl.Result{}, err
+	} else if res.Requeue {
+		conds.SetInProgress("Preparing Issuer")
+		if errU := r.Status().Update(ctx, &kmgm); errU != nil {
+			return ctrl.Result{}, errU
+		}
+
+		return res, nil
+	}
+
+	wasReady := conds.ReadyCond.Status == kmgmissuerv1beta1.ConditionTrue
+	if !wasReady {
+		conds.SetReady()
+		if errU := r.Status().Update(ctx, &kmgm); errU != nil {
+			return ctrl.Result{}, errU
+		}
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -529,6 +639,7 @@ func (r *KmgmReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Secret{}).
 		Owns(&corev1.Service{}).
+		Owns(&kmgmissuerv1beta1.Issuer{}).
 		Complete(r)
 }
 
