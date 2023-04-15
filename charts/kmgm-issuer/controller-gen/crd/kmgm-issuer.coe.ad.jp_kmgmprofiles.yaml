@@ -5,20 +5,20 @@ metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.11.3
   creationTimestamp: null
-  name: issuers.kmgm-issuer.coe.ad.jp
+  name: kmgmprofiles.kmgm-issuer.coe.ad.jp
 spec:
   group: kmgm-issuer.coe.ad.jp
   names:
-    kind: Issuer
-    listKind: IssuerList
-    plural: issuers
-    singular: issuer
+    kind: KmgmProfile
+    listKind: KmgmProfileList
+    plural: kmgmprofiles
+    singular: kmgmprofile
   scope: Namespaced
   versions:
   - name: v1beta1
     schema:
       openAPIV3Schema:
-        description: Issuer is the Schema for the issuers API
+        description: KmgmProfile is the schema for the kmgm API, where each kmgm
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -33,34 +33,54 @@ spec:
           metadata:
             type: object
           spec:
-            description: IssuerSpec defines the desired state of Issuer
+            description: KmgmProfileSpec defines the desired state of KmgmProfile
             properties:
-              accessToken:
-                description: AccessToken is an token string to use for server authentication
-                  when bootstrapping
+              keyType:
+                description: KmgmKeyType specifies the public key algorithm the CA
+                  private key should use.
+                enum:
+                - unspecified
+                - rsa4096
+                - secp256r1
+                - rsa2048
                 type: string
-              hostPort:
-                description: HostPort is a host:port of kmgm server to connect to
+              kmgmName:
+                description: KmgmName is the name of Kmgm that the profile should
+                  be created on
                 type: string
-              pinnedPubKey:
-                description: PinnedPubKey is the expected SHA256 hash of the kmgm
-                  CA server certificate.
+              notAfter:
+                description: Validity specifies the duration the CA certificate should
+                  be valid for.
                 type: string
-              profile:
-                description: Profile specifies the kmgm profile used to issue certificates,
-                  "default" profile will be used if empty
-                type: string
-            required:
-            - hostPort
-            - pinnedPubKey
+              subject:
+                description: Subject is a X509 distinguished name to be assigned to
+                  the CA certificate.
+                properties:
+                  commonName:
+                    type: string
+                  country:
+                    type: string
+                  locality:
+                    type: string
+                  organization:
+                    type: string
+                  organizationalUnit:
+                    type: string
+                  postalCode:
+                    type: string
+                  province:
+                    type: string
+                  streetAddress:
+                    type: string
+                type: object
             type: object
           status:
-            description: IssuerStatus defines the observed state of Issuer
+            description: KmgmProfileStatus defines the observed state of KmgmProfile
             properties:
               conditions:
                 items:
-                  description: IssuerCondition contains condition information for
-                    an Issuer.
+                  description: KmgmProfileCondition contains condition information
+                    for an KmgmProfile.
                   properties:
                     lastTransitionTime:
                       description: LastTransitionTime is the timestamp corresponding
@@ -84,20 +104,15 @@ spec:
                       - Unknown
                       type: string
                     type:
-                      description: IssuerConditionType represents an IssuerCondition's
-                        type.
                       enum:
                       - Ready
+                      - CASetup
                       type: string
                   required:
                   - status
                   - type
                   type: object
                 type: array
-              pubKey:
-                description: PubKey is the SHA256 hash of the kmgm CA server certificate,
-                  used to ensure that the server the issuer is talking to is consistent.
-                type: string
             type: object
         type: object
     served: true

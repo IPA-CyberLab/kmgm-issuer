@@ -82,6 +82,26 @@ rules:
 - apiGroups:
   - kmgm-issuer.coe.ad.jp
   resources:
+  - kmgmprofiles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kmgm-issuer.coe.ad.jp
+  resources:
+  - kmgmprofiles/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - kmgm-issuer.coe.ad.jp
+  resources:
   - kmgms
   verbs:
   - create

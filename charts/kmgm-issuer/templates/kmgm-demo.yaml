@@ -1,9 +1,8 @@
+{{ if .Values.installDemo }}
 apiVersion: kmgm-issuer.coe.ad.jp/v1beta1
 kind: Kmgm
 metadata:
-  name: {{ include "kmgm.fullname" . }}
+  name: {{ include "kmgm.fullname" . }}-demo
 spec:
   image: "{{ .Values.kmgm.image.repository }}:{{ .Values.kmgm.image.tag | default .Chart.AppVersion }}"
-  kmgmProfileSelector:
-    matchLabels:
-      {{- include "kmgm.selectorLabels" . | nindent 6 }}
+{{ end }}

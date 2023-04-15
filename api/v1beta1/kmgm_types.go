@@ -24,9 +24,6 @@ import (
 type KmgmSpec struct {
 	// Kmgm container image to be deployed to the pods.
 	Image string `json:"image,omitempty"`
-
-	// KmgmProfiles to be selected to be assigned to this Kmgm insntance.
-	KmgmProfileSelector *metav1.LabelSelector `json:"kmgmProfileSelector,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Ready

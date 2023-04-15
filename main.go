@@ -22,12 +22,13 @@ import (
 
 	certmanageriov1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	"github.com/go-logr/zapr"
+	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	czap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	kmgmissuerv1beta1 "github.com/IPA-CyberLab/kmgm-issuer/api/v1beta1"
 	"github.com/IPA-CyberLab/kmgm-issuer/controllers"
@@ -55,7 +56,7 @@ func main() {
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.Parse()
 
-	rawzap := zap.NewRaw(zap.UseDevMode(true))
+	rawzap := czap.NewRaw(czap.UseDevMode(true))
 	ctrl.SetLogger(zapr.NewLogger(rawzap))
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
@@ -87,15 +88,6 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "CertificateRequest")
 		os.Exit(1)
 	}
-	if err = (&controllers.IssuerReconciler{
-		Client: mgr.GetClient(),
-		Log:    ctrl.Log.WithName("controllers").WithName("Issuer"),
-		ZapLog: rawzap,
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Issuer")
-		os.Exit(1)
-	}
 	if err = (&controllers.KmgmReconciler{
 		Client: mgr.GetClient(),
 		Log:    ctrl.Log.WithName("controllers").WithName("Kmgm"),
@@ -103,6 +95,25 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Kmgm")
+		os.Exit(1)
+	}
+	if err = (&controllers.KmgmProfileReconciler{
+		Client: mgr.GetClient(),
+		ZapLog: rawzap.With(zap.String("controller", "KmgmProfile")),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "KmgmProfile")
+		os.Exit(1)
+	}
+
+	l := rawzap.With(zap.String("controller", "Issuer"))
+	if err = (&controllers.IssuerReconciler{
+		Client: mgr.GetClient(),
+		Log:    zapr.NewLogger(l),
+		ZapLog: l,
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Issuer")
 		os.Exit(1)
 	}
 

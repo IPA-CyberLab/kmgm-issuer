@@ -130,7 +130,7 @@ func GetIssuerConnectionInfo(ctx context.Context, c client.Client, issuer *kmgmi
 }
 
 func (r *IssuerReconciler) pinPubKey(ctx context.Context, req ctrl.Request, issuer *kmgmissuerv1beta1.Issuer) (ctrl.Result, error) {
-	l := r.Log.WithValues("issuer", req.NamespacedName)
+	s := r.ZapLog.With(zap.Any("issuer", req.NamespacedName)).Sugar()
 
 	if issuer.Status.PubKey != "" {
 		// kmgm server public key already pinned. return.
@@ -158,16 +158,16 @@ func (r *IssuerReconciler) pinPubKey(ctx context.Context, req ctrl.Request, issu
 			return ctrl.Result{}, err
 		}
 
-		l.Info("kmgm server version: %s, commit: %s", resp.Version, resp.Commit)
+		s.Infof("kmgm server version: %s, commit: %s", resp.Version, resp.Commit)
 
 		// Take first pubkey from `pubkeys`.
-		for pubkey, _ := range pubkeys {
+		for pubkey := range pubkeys {
 			issuer.Status.PubKey = pubkey
 			break
 		}
 	}
 
-	l.V(1).Info("Requeuing after pinning kmgm server pubkey")
+	s.Info("Requeuing after pinning kmgm server pubkey")
 	return ctrl.Result{Requeue: true}, nil
 }
 
@@ -294,7 +294,6 @@ func (r *IssuerReconciler) ensureIssuerConditions(ctx context.Context, issuer *k
 		switch cond.Type {
 		case kmgmissuerv1beta1.IssuerConditionReady:
 			retc.ReadyCond = cond
-			break
 		}
 	}
 

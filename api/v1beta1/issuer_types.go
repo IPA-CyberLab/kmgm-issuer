@@ -35,6 +35,7 @@ type IssuerSpec struct {
 	Profile string `json:"profile,omitempty"`
 }
 
+// IssuerConditionType represents an IssuerCondition's type.
 // +kubebuilder:validation:Enum=Ready
 type IssuerConditionType string
 

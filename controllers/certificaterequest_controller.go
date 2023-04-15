@@ -78,7 +78,6 @@ func GetCertificateRequestConditions(certreq *certmanageriov1.CertificateRequest
 		switch cond.Type {
 		case certmanageriov1.CertificateRequestConditionReady:
 			retc.ReadyCond = cond
-			break
 		}
 	}
 	return &retc

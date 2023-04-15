@@ -1,0 +1,14 @@
+{{ if .Values.installDemo }}
+apiVersion: kmgm-issuer.coe.ad.jp/v1beta1
+kind: KmgmProfile
+metadata:
+  name: {{ include "kmgm.fullname" . }}-demo
+spec:
+  kmgmName: {{ include "kmgm.fullname" . }}-demo
+  subject:
+    commonName: demo-ca
+    country: JP
+    province: Tokyo
+  keyType: secp256r1
+  validity: 87600h # 10y
+{{ end }}
