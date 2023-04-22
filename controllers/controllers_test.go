@@ -117,7 +117,6 @@ func runManager(ctx context.Context, t *testing.T, cfg *rest.Config, logger *zap
 	}
 	if err := (&controllers.IssuerReconciler{
 		Client: mgr.GetClient(),
-		Log:    ctrl.Log.WithName("controllers").WithName("Issuer"),
 		ZapLog: logger,
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {

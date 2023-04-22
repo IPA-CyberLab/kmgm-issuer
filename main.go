@@ -109,7 +109,6 @@ func main() {
 	l := rawzap.With(zap.String("controller", "Issuer"))
 	if err = (&controllers.IssuerReconciler{
 		Client: mgr.GetClient(),
-		Log:    zapr.NewLogger(l),
 		ZapLog: l,
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {

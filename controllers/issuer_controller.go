@@ -30,7 +30,6 @@ import (
 	"github.com/IPA-CyberLab/kmgm/remote"
 	"github.com/IPA-CyberLab/kmgm/storage"
 	"github.com/IPA-CyberLab/kmgm/wcrypto"
-	"github.com/go-logr/logr"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
@@ -44,10 +43,11 @@ import (
 	kmgmissuerv1beta1 "github.com/IPA-CyberLab/kmgm-issuer/api/v1beta1"
 )
 
+const CACertKey = "ca.crt"
+
 // IssuerReconciler reconciles a Issuer object
 type IssuerReconciler struct {
 	client.Client
-	Log    logr.Logger
 	ZapLog *zap.Logger
 	Scheme *runtime.Scheme
 }
@@ -80,11 +80,15 @@ func SecretNameFromIssuerName(issuerName types.NamespacedName) types.NamespacedN
 	// TODO[P2]: what if len(Name) > 253
 }
 
-func GetIssuerConnectionInfo(ctx context.Context, c client.Client, issuer *kmgmissuerv1beta1.Issuer) (*remote.ConnectionInfo, error) {
-	if !IssuerIsReady(issuer) {
-		return nil, fmt.Errorf("Issuer %q is not yet ready", issuer.ObjectMeta.Name)
+func ConfigMapNameFromIssuerName(issuerName types.NamespacedName) types.NamespacedName {
+	return types.NamespacedName{
+		Namespace: issuerName.Namespace,
+		Name:      fmt.Sprintf("%s-ca", issuerName.Name),
 	}
+	// TODO[P2]: what if len(Name) > 253
+}
 
+func GetIssuerConnectionInfo(ctx context.Context, c client.Client, issuer *kmgmissuerv1beta1.Issuer) (*remote.ConnectionInfo, error) {
 	nname := SecretNameFromIssuerName(types.NamespacedName{
 		Namespace: issuer.ObjectMeta.Namespace,
 		Name:      issuer.ObjectMeta.Name,
@@ -148,14 +152,14 @@ func (r *IssuerReconciler) pinPubKey(ctx context.Context, req ctrl.Request, issu
 		}
 		conn, pubkeys, err := cinfo.DialPubKeys(ctx, r.ZapLog)
 		if err != nil {
-			return ctrl.Result{}, err
+			return RetryAfterDelay, fmt.Errorf("Failed to dial kmgm instance: %w", err)
 		}
 		defer conn.Close()
 
 		sc := pb.NewVersionServiceClient(conn)
 		resp, err := sc.GetVersion(ctx, &pb.GetVersionRequest{})
 		if err != nil {
-			return ctrl.Result{}, err
+			return RetryAfterDelay, fmt.Errorf("GetVersion gRPC failure: %v", err)
 		}
 
 		s.Infof("kmgm server version: %s, commit: %s", resp.Version, resp.Commit)
@@ -171,18 +175,20 @@ func (r *IssuerReconciler) pinPubKey(ctx context.Context, req ctrl.Request, issu
 	return ctrl.Result{Requeue: true}, nil
 }
 
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;delete
+
 func (r *IssuerReconciler) reconcileSecret(ctx context.Context, req ctrl.Request, issuer *kmgmissuerv1beta1.Issuer) (ctrl.Result, error) {
-	l := r.Log.WithValues("issuer", req.NamespacedName)
+	s := r.ZapLog.With(zap.Any("issuer", req.NamespacedName)).Sugar()
 
 	secretName := SecretNameFromIssuerName(req.NamespacedName)
 
 	var secret corev1.Secret
 	if err := r.Get(ctx, secretName, &secret); err != nil {
 		if !apierrors.IsNotFound(err) {
-			// FIXME: why l.Error instead of return err? here and below?
-			l.Error(err, "Failed to get secret")
+			return RetryAfterDelay, fmt.Errorf("Failed to get secret: %w", err)
 		}
-		l.V(1).Info("secret does not exist")
+
+		s.Infof("Secret %v does not exist. Creating.", secretName)
 
 		secret.Name = secretName.Name
 		secret.Namespace = secretName.Namespace
@@ -193,12 +199,13 @@ func (r *IssuerReconciler) reconcileSecret(ctx context.Context, req ctrl.Request
 		}
 
 		if err := ctrl.SetControllerReference(issuer, &secret, r.Scheme); err != nil {
-			l.Error(err, "unable to set secret's controller ref")
-			return ctrl.Result{}, err
+			return RetryAfterDelay, fmt.Errorf("unable to set secret %v controller ref: %w", secretName, err)
 		}
 		if err := r.Create(ctx, &secret); err != nil {
-			l.Error(err, "unable to create secret")
+			return RetryAfterDelay, fmt.Errorf("Unable to create secret %v: %w", secretName, err)
 		}
+
+		s.Infof("Successfully created secret %v. Requeueing.", secretName)
 		return ctrl.Result{Requeue: true}, nil
 	}
 
@@ -211,11 +218,11 @@ func (r *IssuerReconciler) reconcileSecret(ctx context.Context, req ctrl.Request
 	if pem := secret.Data[corev1.TLSPrivateKeyKey]; len(pem) == 0 {
 		priv, err := wcrypto.GenerateKey(rand.Reader, wcrypto.KeySECP256R1, "kmgm-issuer node key", r.ZapLog)
 		if err != nil {
-			return ctrl.Result{}, err
+			return RetryAfterDelay, fmt.Errorf("Failed to generate private key: %w", err)
 		}
 		bs, err := pemparser.MarshalPrivateKey(priv)
 		if err != nil {
-			return ctrl.Result{}, err
+			return RetryAfterDelay, fmt.Errorf("Failed to marshal private key: %w", err)
 		}
 		secret.Data[corev1.TLSPrivateKeyKey] = bs
 		secretModified = true
@@ -225,17 +232,17 @@ func (r *IssuerReconciler) reconcileSecret(ctx context.Context, req ctrl.Request
 			privpem := secret.Data[corev1.TLSPrivateKeyKey]
 			priv, err := pemparser.ParsePrivateKey(privpem)
 			if err != nil {
-				return ctrl.Result{}, err
+				return RetryAfterDelay, fmt.Errorf("Failed to parse PrivateKey: %w", err)
 			}
 
 			pub, err := wcrypto.ExtractPublicKey(priv)
 			if err != nil {
-				return ctrl.Result{}, err
+				return RetryAfterDelay, fmt.Errorf("Failed to extract public key from the private key: %w", err)
 			}
 
 			pkixpub, err := x509.MarshalPKIXPublicKey(pub)
 			if err != nil {
-				return ctrl.Result{}, err
+				return RetryAfterDelay, fmt.Errorf("Failed to marshal public key: %w", err)
 			}
 
 			cinfo := &remote.ConnectionInfo{
@@ -246,7 +253,7 @@ func (r *IssuerReconciler) reconcileSecret(ctx context.Context, req ctrl.Request
 			}
 			conn, err := cinfo.Dial(ctx, r.ZapLog)
 			if err != nil {
-				return ctrl.Result{}, err
+				return RetryAfterDelay, fmt.Errorf("Failed to dial kmgm instance: %w", err)
 			}
 			defer conn.Close()
 
@@ -260,7 +267,7 @@ func (r *IssuerReconciler) reconcileSecret(ctx context.Context, req ctrl.Request
 				Profile:          consts.AuthProfileName,
 			})
 			if err != nil {
-				return ctrl.Result{}, err
+				return RetryAfterDelay, fmt.Errorf("IssueCertificate gRPC failure: %w", err)
 			}
 
 			certpem := pemparser.MarshalCertificateDer(resp.Certificate)
@@ -270,11 +277,88 @@ func (r *IssuerReconciler) reconcileSecret(ctx context.Context, req ctrl.Request
 	}
 	if secretModified {
 		if err := r.Update(ctx, &secret); err != nil {
-			l.Error(err, "unable to update secret")
-			return ctrl.Result{}, err
+			err = fmt.Errorf("unable to update secret: %w", err)
+			s.Error(err)
+			return RetryAfterDelay, err
 		}
-		l.V(1).Info("Requeuing after secret gen")
+		s.Infof("Successfully updated the secret %v.", secretName)
+		return ctrl.Result{}, nil
+	}
+
+	return ctrl.Result{}, nil
+}
+
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;delete
+
+func (r *IssuerReconciler) reconcileConfigMap(ctx context.Context, req ctrl.Request, issuer *kmgmissuerv1beta1.Issuer) (ctrl.Result, error) {
+	s := r.ZapLog.With(zap.Any("issuer", req.NamespacedName)).Sugar()
+
+	cmName := ConfigMapNameFromIssuerName(req.NamespacedName)
+
+	var cm corev1.ConfigMap
+	if err := r.Get(ctx, cmName, &cm); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return RetryAfterDelay, fmt.Errorf("Failed to get ConfigMap %v: %w", cmName, err)
+		}
+
+		cm.Name = cmName.Name
+		cm.Namespace = cmName.Namespace
+
+		if err := ctrl.SetControllerReference(issuer, &cm, r.Scheme); err != nil {
+			err = fmt.Errorf("unable to set configmap's controller ref: %w", err)
+			s.Error(err)
+			return RetryAfterDelay, err
+		}
+		if err := r.Create(ctx, &cm); err != nil {
+			err = fmt.Errorf("unable to create configmap: %w", err)
+			s.Error(err)
+			return RetryAfterDelay, err
+		}
 		return ctrl.Result{Requeue: true}, nil
+	}
+
+	cinfo, err := GetIssuerConnectionInfo(ctx, r.Client, issuer)
+	if err != nil {
+		return RetryAfterDelay, fmt.Errorf("failed to get kmgm server connection info from issuer: %w", err)
+	}
+	conn, err := cinfo.Dial(ctx, r.ZapLog)
+	if err != nil {
+		return RetryAfterDelay, fmt.Errorf("failed to establish connection to the kmgm server: %w", err)
+	}
+	defer conn.Close()
+
+	sc := pb.NewCertificateServiceClient(conn)
+
+	profile := issuer.Spec.Profile
+	if profile == "" {
+		profile = "default"
+	}
+
+	getcertresp, err := sc.GetCertificate(ctx, &pb.GetCertificateRequest{
+		Profile:      profile,
+		SerialNumber: 0,
+	})
+	if err != nil {
+		return RetryAfterDelay, fmt.Errorf("Failed to GetCertificate(%s, 0): %w", profile, err)
+	}
+	caPem := pemparser.MarshalCertificateDer(getcertresp.Certificate)
+	caPemStr := string(caPem)
+
+	// FIXME[P2]: check if configmap is owned by issuer?
+
+	if cm.Data == nil {
+		cm.Data = make(map[string]string)
+	}
+	if cm.Data[CACertKey] != caPemStr {
+		s.Infof("ConfigMap %v %q was not up-to-date. Updating.", cmName, CACertKey)
+
+		cm.Data[CACertKey] = caPemStr
+		if err := r.Update(ctx, &cm); err != nil {
+			err = fmt.Errorf("unable to update configmap: %w", err)
+			s.Error(err)
+			return RetryAfterDelay, err
+		}
+		return ctrl.Result{}, nil
 	}
 
 	return ctrl.Result{}, nil
@@ -285,6 +369,9 @@ type issuerConditions struct {
 }
 
 func (r *IssuerReconciler) ensureIssuerConditions(ctx context.Context, issuer *kmgmissuerv1beta1.Issuer) (*issuerConditions, ctrl.Result, error) {
+	s := r.ZapLog.Named("IssuerReconciler.ensureIssuerConditions").
+		With(zap.Any("issuer", issuer)).Sugar()
+
 	var retc issuerConditions
 
 	conds := issuer.Status.Conditions
@@ -313,6 +400,7 @@ func (r *IssuerReconciler) ensureIssuerConditions(ctx context.Context, issuer *k
 		if err := r.Status().Update(ctx, issuer); err != nil {
 			return nil, ctrl.Result{}, err
 		}
+		s.Info("Instantiated issuer.Status.Conditions. Requeuing.")
 		return nil, ctrl.Result{Requeue: true}, nil
 	}
 
@@ -345,19 +433,20 @@ func (c *issuerConditions) SetErrorState(reason string, err error) {
 
 // +kubebuilder:rbac:groups=kmgm-issuer.coe.ad.jp,resources=issuers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kmgm-issuer.coe.ad.jp,resources=issuers/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;delete
 
 func (r *IssuerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	l := r.Log.WithValues("issuer", req.NamespacedName)
+	s := r.ZapLog.With(zap.Any("issuer", req.NamespacedName)).Sugar()
 
 	var issuer kmgmissuerv1beta1.Issuer
 	if err := r.Get(ctx, req.NamespacedName, &issuer); err != nil {
 		if apierrors.IsNotFound(err) {
-			l.Error(nil, "Couldn't find the issuer.")
-			return ctrl.Result{}, nil
+			s.Error(err.Error())
+			return ctrl.Result{}, err
 		}
 
-		return ctrl.Result{}, err
+		err := fmt.Errorf("Failed to `Get` Issuer resource: %v", err)
+		s.Error(err.Error())
+		return RetryAfterDelay, err
 	}
 
 	conds, res, err := r.ensureIssuerConditions(ctx, &issuer)
@@ -369,38 +458,56 @@ func (r *IssuerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		conds.SetErrorState("PinPubKeyFailure", err)
 
 		if errU := r.Status().Update(ctx, &issuer); errU != nil {
-			return ctrl.Result{}, multierr.Append(err, errU)
+			return RetryAfterDelay, multierr.Append(err, errU)
 		}
 
-		return ctrl.Result{}, err
+		return RetryAfterDelay, err
 	} else if res.Requeue {
 		conds.SetInProgress("Pinned PubKey")
 
 		if errU := r.Status().Update(ctx, &issuer); errU != nil {
-			return ctrl.Result{}, errU
+			return RetryAfterDelay, errU
 		}
 		return res, nil
 	}
 
 	if res, err := r.reconcileSecret(ctx, req, &issuer); err != nil {
 		conds.SetErrorState("ClientCertificateFailure", err)
+		err = fmt.Errorf("reconcileSecret failed: %w", err)
+		s.Error(err)
 
 		if errU := r.Status().Update(ctx, &issuer); errU != nil {
-			return ctrl.Result{}, multierr.Append(err, errU)
+			return RetryAfterDelay, multierr.Append(err, errU)
 		}
-		return ctrl.Result{}, err
+		return res, err
 	} else if res.Requeue {
 		conds.SetInProgress("Preparing Secret")
 
 		if errU := r.Status().Update(ctx, &issuer); errU != nil {
-			return ctrl.Result{}, errU
+			return RetryAfterDelay, errU
+		}
+		return res, nil
+	}
+
+	if res, err := r.reconcileConfigMap(ctx, req, &issuer); err != nil {
+		conds.SetErrorState("CACertConfigMapFailure", err)
+
+		if errU := r.Status().Update(ctx, &issuer); errU != nil {
+			return RetryAfterDelay, multierr.Append(err, errU)
+		}
+		return res, err
+	} else if res.Requeue {
+		conds.SetInProgress("Preparing CACertConfigMap")
+
+		if errU := r.Status().Update(ctx, &issuer); errU != nil {
+			return RetryAfterDelay, errU
 		}
 		return res, nil
 	}
 
 	conds.SetReady()
 	if errU := r.Status().Update(ctx, &issuer); errU != nil {
-		return ctrl.Result{}, errU
+		return RetryAfterDelay, errU
 	}
 
 	return ctrl.Result{}, nil
@@ -410,5 +517,6 @@ func (r *IssuerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kmgmissuerv1beta1.Issuer{}).
 		Owns(&corev1.Secret{}).
+		Owns(&corev1.ConfigMap{}).
 		Complete(r)
 }

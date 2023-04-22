@@ -256,6 +256,9 @@ func (r *KmgmProfileReconciler) ensureCA(ctx context.Context, p *kmgmissuerv1bet
 	nn := types.NamespacedName{Namespace: p.Namespace, Name: p.Name}
 	s := r.ZapLog.With(zap.Any("kmgmProfile", nn)).Sugar()
 
+	if !IssuerIsReady(issuer) {
+		return RetryAfterDelay, fmt.Errorf("Issuer %q is not yet ready", issuer.ObjectMeta.Name)
+	}
 	cinfo, err := GetIssuerConnectionInfo(ctx, r.Client, issuer)
 	if err != nil {
 		return RetryAfterDelay, fmt.Errorf("failed to get kmgm server connection info from issuer: %w", err)

@@ -158,6 +158,9 @@ func (r *CertificateRequestReconciler) issueCertificate(ctx context.Context, iss
 		return nil, nil, fmt.Errorf("failed to marshal given public key: %w", err)
 	}
 
+	if !IssuerIsReady(issuer) {
+		return nil, nil, fmt.Errorf("Issuer %q is not yet ready", issuer.ObjectMeta.Name)
+	}
 	cinfo, err := GetIssuerConnectionInfo(ctx, r.Client, issuer)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get kmgm server connection info from issuer: %w", err)
