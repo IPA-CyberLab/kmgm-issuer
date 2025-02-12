@@ -1,0 +1,20 @@
+---
+apiVersion: kmgm-issuer.coe.ad.jp/v1beta1
+kind: Kmgm
+metadata:
+  name: kmgm-issuer-demo
+spec:
+  image: "ghcr.io/ipa-cyberlab/kmgm:latest"
+---
+apiVersion: kmgm-issuer.coe.ad.jp/v1beta1
+kind: KmgmProfile
+metadata:
+  name: kmgm-issuer-demo
+spec:
+  kmgmName: kmgm-issuer-demo
+  subject:
+    commonName: demo-ca
+    country: JP
+    province: Tokyo
+  keyType: secp256r1
+  validity: 87600h # 10y
