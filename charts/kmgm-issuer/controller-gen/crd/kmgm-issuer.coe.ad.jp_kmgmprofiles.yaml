@@ -3,8 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.11.3
-  creationTimestamp: null
+    controller-gen.kubebuilder.io/version: v0.17.1
   name: kmgmprofiles.kmgm-issuer.coe.ad.jp
 spec:
   group: kmgm-issuer.coe.ad.jp
@@ -21,14 +20,19 @@ spec:
         description: KmgmProfile is the schema for the kmgm API, where each kmgm
         properties:
           apiVersion:
-            description: 'APIVersion defines the versioned schema of this representation
-              of an object. Servers should convert recognized schemas to the latest
-              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
             type: string
           kind:
-            description: 'Kind is a string value representing the REST resource this
-              object represents. Servers may infer this from the endpoint the client
-              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
             type: string
           metadata:
             type: object
@@ -47,10 +51,6 @@ spec:
               kmgmName:
                 description: KmgmName is the name of Kmgm that the profile should
                   be created on
-                type: string
-              notAfter:
-                description: Validity specifies the duration the CA certificate should
-                  be valid for.
                 type: string
               subject:
                 description: Subject is a X509 distinguished name to be assigned to
@@ -73,6 +73,10 @@ spec:
                   streetAddress:
                     type: string
                 type: object
+              validity:
+                description: Validity specifies the duration the CA certificate should
+                  be valid for.
+                type: string
             type: object
           status:
             description: KmgmProfileStatus defines the observed state of KmgmProfile
@@ -83,17 +87,20 @@ spec:
                     for an KmgmProfile.
                   properties:
                     lastTransitionTime:
-                      description: LastTransitionTime is the timestamp corresponding
-                        to the last status change of this condition.
+                      description: |-
+                        LastTransitionTime is the timestamp corresponding to the last status
+                        change of this condition.
                       format: date-time
                       type: string
                     message:
-                      description: Message is a human readable description of the
-                        details of the last transition, complementing reason.
+                      description: |-
+                        Message is a human readable description of the details of the last
+                        transition, complementing reason.
                       type: string
                     reason:
-                      description: Reason is a brief machine readable explanation
-                        for the condition's last transition.
+                      description: |-
+                        Reason is a brief machine readable explanation for the condition's last
+                        transition.
                       type: string
                     status:
                       description: Status of the condition, one of ('True', 'False',

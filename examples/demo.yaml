@@ -4,7 +4,7 @@ kind: Kmgm
 metadata:
   name: kmgm-issuer-demo
 spec:
-  image: "ghcr.io/ipa-cyberlab/kmgm:latest"
+  image: core.harbor.nyaxtstep.com/kmgm/kmgm:latest
 ---
 apiVersion: kmgm-issuer.coe.ad.jp/v1beta1
 kind: KmgmProfile

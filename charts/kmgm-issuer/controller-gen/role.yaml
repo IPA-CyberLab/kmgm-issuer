@@ -2,23 +2,12 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  creationTimestamp: null
   name: manager-role
 rules:
 - apiGroups:
   - ""
   resources:
   - configmaps
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
   - secrets
   verbs:
   - create
@@ -74,45 +63,7 @@ rules:
   - kmgm-issuer.coe.ad.jp
   resources:
   - issuers
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - kmgm-issuer.coe.ad.jp
-  resources:
-  - issuers/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - kmgm-issuer.coe.ad.jp
-  resources:
   - kmgmprofiles
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - kmgm-issuer.coe.ad.jp
-  resources:
-  - kmgmprofiles/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - kmgm-issuer.coe.ad.jp
-  resources:
   - kmgms
   verbs:
   - create
@@ -125,6 +76,8 @@ rules:
 - apiGroups:
   - kmgm-issuer.coe.ad.jp
   resources:
+  - issuers/status
+  - kmgmprofiles/status
   - kmgms/status
   verbs:
   - get

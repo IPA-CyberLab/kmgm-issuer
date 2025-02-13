@@ -54,7 +54,7 @@ type KmgmProfileSpec struct {
 	KmgmKeyType KmgmKeyType `json:"keyType,omitempty"`
 
 	// Validity specifies the duration the CA certificate should be valid for.
-	Validity *metav1.Duration `json:"notAfter,omitempty"`
+	Validity *metav1.Duration `json:"validity,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Ready;CASetup
