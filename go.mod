@@ -4,7 +4,7 @@ go 1.20
 
 require (
 	github.com/IPA-CyberLab/kmgm v0.2.5-0.20230312050947-7c09c1ba07d5
-	github.com/cert-manager/cert-manager v1.11.0
+	github.com/cert-manager/cert-manager v1.17.1
 	github.com/go-logr/logr v1.2.3
 	github.com/go-logr/zapr v1.2.3
 	github.com/google/go-cmp v0.5.9
