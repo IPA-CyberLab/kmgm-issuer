@@ -17,6 +17,7 @@ limitations under the License.
 package v1beta1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -30,6 +31,9 @@ type IssuerSpec struct {
 
 	// AccessToken is an token string to use for server authentication when bootstrapping
 	AccessToken string `json:"accessToken,omitempty"`
+
+	// AccessTokenSecret points to a secret containing the token string to use for server authentication when bootstrapping
+	AccessTokenSecret *corev1.SecretKeySelector `json:"accessTokenSecret,omitempty"`
 
 	// Profile specifies the kmgm profile used to issue certificates, "default" profile will be used if empty
 	Profile string `json:"profile,omitempty"`
