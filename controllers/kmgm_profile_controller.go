@@ -157,7 +157,7 @@ func makeIssuerSpec(p *kmgmissuerv1beta1.KmgmProfile, kmgm *kmgmissuerv1beta1.Km
 	svcName := serviceNameFromKmgmName(nn)
 
 	return kmgmissuerv1beta1.IssuerSpec{
-		HostPort:     fmt.Sprintf("%s:34680", svcName.Name),
+		HostPort:     fmt.Sprintf("%s.%s.svc:34680", svcName.Name, svcName.Namespace),
 		PinnedPubKey: "", // empty == pin server pubkey on first conn.
 		AccessToken:  bootstrapToken,
 		Profile:      p.Name,
