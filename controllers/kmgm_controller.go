@@ -196,10 +196,10 @@ func (r *KmgmReconciler) reconcileSecret(ctx context.Context, kmgm *kmgmissuerv1
 		Name:      kmgm.ObjectMeta.Name,
 	}
 
-	l := r.Log.WithValues("kmgm", nn)
-	l.Info("reconcileSecret start")
+	s := r.ZapLog.Sugar().Named("KmgmReconciler.reconcileSecret").With("kmgm", nn.String())
+	s.Info("start")
 	defer func() {
-		l.Info("reconcileSecret end")
+		s.Info("end")
 	}()
 
 	secretName := bootstrapSecretNameFromKmgmName(nn)
@@ -210,7 +210,7 @@ func (r *KmgmReconciler) reconcileSecret(ctx context.Context, kmgm *kmgmissuerv1
 		}
 
 		if err := r.createBootstrapSecret(ctx, kmgm); err != nil {
-			l.Error(err, "unable to create secret")
+			s.Errorf("unable to create secret: %v", err)
 		}
 		return RetryAfterDelay, nil
 	}
@@ -218,22 +218,41 @@ func (r *KmgmReconciler) reconcileSecret(ctx context.Context, kmgm *kmgmissuerv1
 	// ensure data.token
 	tokenbs := bootstrapSecret.Data["token"]
 	if len(tokenbs) == 0 {
-		if token, err := wcrypto.GenBase64Token(rand.Reader, r.ZapLog); err != nil {
-			return RetryAfterDelay, fmt.Errorf("Failed to generate bootstrap token: %w", err)
-		} else {
-			if bootstrapSecret.StringData == nil {
-				bootstrapSecret.StringData = make(map[string]string)
-			}
-			bootstrapSecret.StringData["token"] = token
+		s.Info("token not found in the Secret, generating a new token")
+	} else {
+		var tokenCreationTimestamp time.Time
+		creationTimestampBs := bootstrapSecret.Data["tokenCreationTimestamp"]
+		if t, err := time.Parse(time.RFC3339, string(creationTimestampBs)); err == nil {
+			tokenCreationTimestamp = t
+		}
 
-			if err := r.Client.Update(ctx, &bootstrapSecret); err != nil {
-				return RetryAfterDelay, fmt.Errorf("Failed to update Secret: %w", err)
-			}
-			return ctrl.Result{Requeue: true}, nil
+		const tokenStaleThreshold = 10 * time.Minute
+		since := time.Since(tokenCreationTimestamp)
+		if since > tokenStaleThreshold {
+			s.Infof("tokenCreationTimestamp was %v, which is %v ago that exceeds threshold %v. Generating a new token.",
+				tokenCreationTimestamp, since, tokenStaleThreshold)
+		} else {
+			s.Infof("tokenCreationTimestamp was %v, which is %v ago (threshold: %v). Not generating a new token.",
+				tokenCreationTimestamp, since, tokenStaleThreshold)
+			return ctrl.Result{}, nil
 		}
 	}
 
-	return ctrl.Result{}, nil
+	token, err := wcrypto.GenBase64Token(rand.Reader, r.ZapLog)
+	if err != nil {
+		return RetryAfterDelay, fmt.Errorf("Failed to generate bootstrap token: %w", err)
+	}
+
+	if bootstrapSecret.StringData == nil {
+		bootstrapSecret.StringData = make(map[string]string)
+	}
+	bootstrapSecret.StringData["token"] = token
+	bootstrapSecret.StringData["tokenCreationTimestamp"] = time.Now().UTC().Format(time.RFC3339)
+
+	if err := r.Client.Update(ctx, &bootstrapSecret); err != nil {
+		return RetryAfterDelay, fmt.Errorf("Failed to update Secret: %w", err)
+	}
+	return ctrl.Result{Requeue: true}, nil
 }
 
 var persistentVolumeFilesystem = corev1.PersistentVolumeFilesystem
@@ -546,7 +565,9 @@ func (r *KmgmReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			return ctrl.Result{}, errU
 		}
 	}
-	return ctrl.Result{}, nil
+
+	// requeue every minute to ensure bootstrapToken secret is up-to-date.
+	return ctrl.Result{RequeueAfter: time.Minute}, nil
 }
 
 func (r *KmgmReconciler) SetupWithManager(mgr ctrl.Manager) error {
