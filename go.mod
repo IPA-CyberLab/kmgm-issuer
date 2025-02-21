@@ -7,7 +7,7 @@ require (
 	github.com/cert-manager/cert-manager v1.11.0
 	github.com/go-logr/logr v1.2.3
 	github.com/go-logr/zapr v1.2.3
-	github.com/google/go-cmp v0.5.9
+	github.com/google/go-cmp v0.7.0
 	go.uber.org/multierr v1.10.0
 	go.uber.org/zap v1.24.0
 	k8s.io/api v0.26.2
