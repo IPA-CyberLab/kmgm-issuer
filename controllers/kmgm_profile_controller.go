@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kmgmissuerv1beta1 "github.com/IPA-CyberLab/kmgm-issuer/api/v1beta1"
 	"github.com/IPA-CyberLab/kmgm/pb"
@@ -149,18 +150,27 @@ func issuerNameFromProfileName(pname types.NamespacedName) types.NamespacedName 
 	return pname
 }
 
-func makeIssuerSpec(p *kmgmissuerv1beta1.KmgmProfile, kmgm *kmgmissuerv1beta1.Kmgm, bootstrapToken string) kmgmissuerv1beta1.IssuerSpec {
+func pbool(b bool) *bool { return &b }
+
+func makeIssuerSpec(p *kmgmissuerv1beta1.KmgmProfile, kmgm *kmgmissuerv1beta1.Kmgm) kmgmissuerv1beta1.IssuerSpec {
 	nn := types.NamespacedName{
 		Namespace: kmgm.ObjectMeta.Namespace,
 		Name:      kmgm.ObjectMeta.Name,
 	}
 	svcName := serviceNameFromKmgmName(nn)
+	tokenSecretName := bootstrapSecretNameFromKmgmName(nn)
 
 	return kmgmissuerv1beta1.IssuerSpec{
 		HostPort:     fmt.Sprintf("%s.%s.svc:34680", svcName.Name, svcName.Namespace),
 		PinnedPubKey: "", // empty == pin server pubkey on first conn.
-		AccessToken:  bootstrapToken,
-		Profile:      p.Name,
+		AccessTokenSecret: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{
+				Name: tokenSecretName.Name,
+			},
+			Key:      "token",
+			Optional: pbool(false),
+		},
+		Profile: p.Name,
 	}
 }
 
@@ -174,21 +184,6 @@ func (r *KmgmProfileReconciler) reconcileIssuer(ctx context.Context, p *kmgmissu
 	defer func() {
 		s.Info("reconcileIssuer end")
 	}()
-
-	bootstrapSecretName := bootstrapSecretNameFromKmgmName(types.NamespacedName{Namespace: kmgm.Namespace, Name: kmgm.Name})
-	var bootstrapSecret corev1.Secret
-	if err := r.Client.Get(ctx, bootstrapSecretName, &bootstrapSecret); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return nil, RetryAfterDelay, fmt.Errorf("kmgm bootstrap Secret %v is not found.", bootstrapSecretName)
-		}
-
-		return nil, RetryAfterDelay, fmt.Errorf("Failed to get kmgm bootstrap Secret %v: %w", bootstrapSecretName, err)
-	}
-	tokenbs := bootstrapSecret.Data["token"]
-	if len(tokenbs) == 0 {
-		return nil, RetryAfterDelay, fmt.Errorf("No data[\"token\"] found inside kmgm bootstrap Secret %v.", bootstrapSecretName)
-	}
-	bootstrapToken := string(tokenbs)
 
 	issuerName := issuerNameFromProfileName(nn)
 	var issuer kmgmissuerv1beta1.Issuer
@@ -209,7 +204,7 @@ func (r *KmgmProfileReconciler) reconcileIssuer(ctx context.Context, p *kmgmissu
 			},
 			// FIXME: copy labels+annotations (but maybe not those w/ kubectl.kubernetes.io: https://github.com/prometheus-operator/prometheus-operator/blob/16dfbf448ff439907daaa8c58a3b388e1060106f/pkg/alertmanager/statefulset.go#L125)
 		}
-		issuer.Spec = makeIssuerSpec(p, kmgm, bootstrapToken)
+		issuer.Spec = makeIssuerSpec(p, kmgm)
 
 		if err := ctrl.SetControllerReference(p, &issuer, r.Scheme); err != nil {
 			err := fmt.Errorf("unable to set the controller ref of issuer %v.", issuerName)
@@ -222,7 +217,7 @@ func (r *KmgmProfileReconciler) reconcileIssuer(ctx context.Context, p *kmgmissu
 		return nil, ctrl.Result{Requeue: true}, nil
 	}
 
-	newSpec := makeIssuerSpec(p, kmgm, bootstrapToken)
+	newSpec := makeIssuerSpec(p, kmgm)
 	diff := cmp.Diff(&newSpec, &issuer.Spec)
 	if diff != "" {
 		issuer.Spec = newSpec
@@ -256,17 +251,17 @@ func (r *KmgmProfileReconciler) ensureCA(ctx context.Context, p *kmgmissuerv1bet
 	nn := types.NamespacedName{Namespace: p.Namespace, Name: p.Name}
 	s := r.ZapLog.With(zap.Any("kmgmProfile", nn)).Sugar()
 
-	if !IssuerIsReady(issuer) {
-		return RetryAfterDelay, fmt.Errorf("Issuer %q is not yet ready", issuer.ObjectMeta.Name)
+	if !IssuerHasCliCertIssued(issuer) {
+		return reconcile.Result{}, fmt.Errorf("Issuer %q doesn't have clicert yet.", issuer.ObjectMeta.Name)
 	}
 	cinfo, err := GetIssuerConnectionInfo(ctx, r.Client, issuer)
 	if err != nil {
-		return RetryAfterDelay, fmt.Errorf("failed to get kmgm server connection info from issuer: %w", err)
+		return reconcile.Result{}, fmt.Errorf("failed to get kmgm server connection info from issuer: %w", err)
 	}
 
 	conn, err := cinfo.Dial(ctx, r.ZapLog)
 	if err != nil {
-		return RetryAfterDelay, fmt.Errorf("failed to establish connection to the kmgm server: %w", err)
+		return reconcile.Result{}, fmt.Errorf("failed to establish connection to the kmgm server: %w", err)
 	}
 	defer conn.Close()
 
@@ -300,7 +295,7 @@ func (r *KmgmProfileReconciler) ensureCA(ctx context.Context, p *kmgmissuerv1bet
 
 		err := fmt.Errorf("SetupCA gRPC has failed: %w", err)
 		s.Error(err.Error())
-		return RetryAfterDelay, err
+		return ctrl.Result{}, err
 	}
 
 	s.Info("SetupCA gRPC was successful.")
@@ -388,6 +383,7 @@ func (r *KmgmProfileReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return res, nil
 	}
 
+	// is not reached, since CASetupFailure: "Issuer "htdi" is not ready".
 	if res, err := r.ensureCA(ctx, &p, &kmgm, issuer); err != nil {
 		conds.SetCASetupError(err)
 		if errU := r.Status().Update(ctx, &p); errU != nil {

@@ -63,6 +63,15 @@ func FindIssuerConditionOfType(issuer *kmgmissuerv1beta1.Issuer, t kmgmissuerv1b
 	return nil
 }
 
+func IssuerHasCliCertIssued(issuer *kmgmissuerv1beta1.Issuer) bool {
+	cond := FindIssuerConditionOfType(issuer, kmgmissuerv1beta1.IssuerConditionCliCertIssued)
+	if cond == nil {
+		return false
+	}
+
+	return cond.Status == kmgmissuerv1beta1.ConditionTrue
+}
+
 func IssuerIsReady(issuer *kmgmissuerv1beta1.Issuer) bool {
 	cond := FindIssuerConditionOfType(issuer, kmgmissuerv1beta1.IssuerConditionReady)
 	if cond == nil {
@@ -86,6 +95,37 @@ func ConfigMapNameFromIssuerName(issuerName types.NamespacedName) types.Namespac
 		Name:      fmt.Sprintf("%s-ca", issuerName.Name),
 	}
 	// TODO[P2]: what if len(Name) > 253
+}
+
+func GetTokenFromSecret(ctx context.Context, c client.Client, ns string, sel *corev1.SecretKeySelector) (string, error) {
+	bootstrapSecretName := types.NamespacedName{
+		Namespace: ns,
+		Name:      sel.Name,
+	}
+
+	var bootstrapSecret corev1.Secret
+	if err := c.Get(ctx, bootstrapSecretName, &bootstrapSecret); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return "", fmt.Errorf("kmgm bootstrap Secret %v is not found.", bootstrapSecretName)
+		}
+
+		return "", fmt.Errorf("Failed to get kmgm bootstrap Secret %v: %w", bootstrapSecretName, err)
+	}
+	tokenbs := bootstrapSecret.Data[sel.Key]
+	if len(tokenbs) == 0 {
+		return "", fmt.Errorf("No data[%q] found inside kmgm bootstrap Secret %v.", sel.Key, bootstrapSecretName)
+	}
+	bootstrapToken := string(tokenbs)
+
+	return bootstrapToken, nil
+}
+
+func GetToken(ctx context.Context, c client.Client, issuer *kmgmissuerv1beta1.Issuer) (string, error) {
+	if issuer.Spec.AccessToken != "" {
+		return issuer.Spec.AccessToken, nil
+	}
+
+	return GetTokenFromSecret(ctx, c, issuer.ObjectMeta.Namespace, issuer.Spec.AccessTokenSecret)
 }
 
 func GetIssuerConnectionInfo(ctx context.Context, c client.Client, issuer *kmgmissuerv1beta1.Issuer) (*remote.ConnectionInfo, error) {
@@ -145,10 +185,15 @@ func (r *IssuerReconciler) pinPubKey(ctx context.Context, req ctrl.Request, issu
 		// Pin kmgm server public key to specified.
 		issuer.Status.PubKey = issuer.Spec.PinnedPubKey
 	} else {
+		token, err := GetToken(ctx, r.Client, issuer)
+		if err != nil {
+			return RetryAfterDelay, fmt.Errorf("Failed to get token: %w", err)
+		}
+
 		cinfo := &remote.ConnectionInfo{
 			HostPort:      issuer.Spec.HostPort,
 			AllowInsecure: true,
-			AccessToken:   issuer.Spec.AccessToken,
+			AccessToken:   token,
 		}
 		conn, pubkeys, err := cinfo.DialPubKeys(ctx, r.ZapLog)
 		if err != nil {
@@ -196,6 +241,9 @@ func (r *IssuerReconciler) reconcileSecret(ctx context.Context, req ctrl.Request
 		secret.Data = map[string][]byte{
 			corev1.TLSPrivateKeyKey: nil,
 			corev1.TLSCertKey:       nil,
+		}
+		secret.Labels = map[string]string{
+			"kmgm-issuer.coe.ad.jp/issuer": req.NamespacedName.Name,
 		}
 
 		if err := ctrl.SetControllerReference(issuer, &secret, r.Scheme); err != nil {
@@ -245,11 +293,16 @@ func (r *IssuerReconciler) reconcileSecret(ctx context.Context, req ctrl.Request
 				return RetryAfterDelay, fmt.Errorf("Failed to marshal public key: %w", err)
 			}
 
+			token, err := GetToken(ctx, r.Client, issuer)
+			if err != nil {
+				return RetryAfterDelay, fmt.Errorf("Failed to get token: %w", err)
+			}
+
 			cinfo := &remote.ConnectionInfo{
 				HostPort:      issuer.Spec.HostPort,
 				PinnedPubKey:  issuer.Spec.PinnedPubKey,
 				AllowInsecure: issuer.Spec.PinnedPubKey == "",
-				AccessToken:   issuer.Spec.AccessToken,
+				AccessToken:   token,
 			}
 			conn, err := cinfo.Dial(ctx, r.ZapLog)
 			if err != nil {
@@ -291,7 +344,7 @@ func (r *IssuerReconciler) reconcileSecret(ctx context.Context, req ctrl.Request
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;delete
 
 func (r *IssuerReconciler) reconcileConfigMap(ctx context.Context, req ctrl.Request, issuer *kmgmissuerv1beta1.Issuer) (ctrl.Result, error) {
-	s := r.ZapLog.With(zap.Any("issuer", req.NamespacedName)).Sugar()
+	s := r.ZapLog.With(zap.Any("issuer", req.NamespacedName)).Named("IssuerReconciler.reconcileConfigMap").Sugar()
 
 	cmName := ConfigMapNameFromIssuerName(req.NamespacedName)
 
@@ -365,7 +418,8 @@ func (r *IssuerReconciler) reconcileConfigMap(ctx context.Context, req ctrl.Requ
 }
 
 type issuerConditions struct {
-	ReadyCond *kmgmissuerv1beta1.IssuerCondition
+	CliCertIssuedCond *kmgmissuerv1beta1.IssuerCondition
+	ReadyCond         *kmgmissuerv1beta1.IssuerCondition
 }
 
 func (r *IssuerReconciler) ensureIssuerConditions(ctx context.Context, issuer *kmgmissuerv1beta1.Issuer) (*issuerConditions, ctrl.Result, error) {
@@ -379,6 +433,9 @@ func (r *IssuerReconciler) ensureIssuerConditions(ctx context.Context, issuer *k
 		cond := &conds[i]
 
 		switch cond.Type {
+		case kmgmissuerv1beta1.IssuerConditionCliCertIssued:
+			retc.CliCertIssuedCond = cond
+
 		case kmgmissuerv1beta1.IssuerConditionReady:
 			retc.ReadyCond = cond
 		}
@@ -386,6 +443,16 @@ func (r *IssuerReconciler) ensureIssuerConditions(ctx context.Context, issuer *k
 
 	condCreated := false
 	now := metav1.Now()
+	if retc.CliCertIssuedCond == nil {
+		issuer.Status.Conditions = append(issuer.Status.Conditions, kmgmissuerv1beta1.IssuerCondition{
+			Type:               kmgmissuerv1beta1.IssuerConditionCliCertIssued,
+			Status:             kmgmissuerv1beta1.ConditionFalse,
+			LastTransitionTime: &now,
+			Reason:             "Bootstrapping",
+			Message:            "Bootstrapping msg",
+		})
+		condCreated = true
+	}
 	if retc.ReadyCond == nil {
 		issuer.Status.Conditions = append(issuer.Status.Conditions, kmgmissuerv1beta1.IssuerCondition{
 			Type:               kmgmissuerv1beta1.IssuerConditionReady,
@@ -404,31 +471,75 @@ func (r *IssuerReconciler) ensureIssuerConditions(ctx context.Context, issuer *k
 		return nil, ctrl.Result{Requeue: true}, nil
 	}
 
+	s.Info("Ensured that all conditions are available.")
 	return &retc, ctrl.Result{}, nil
 }
 
-func (c *issuerConditions) SetReady() {
+func (c *issuerConditions) SetCliCertInProgress(msg string) {
 	now := metav1.Now()
-	c.ReadyCond.Status = kmgmissuerv1beta1.ConditionTrue
+	c.CliCertIssuedCond.Status = kmgmissuerv1beta1.ConditionFalse
+	c.CliCertIssuedCond.LastTransitionTime = &now
+	c.CliCertIssuedCond.Reason = "InProgress"
+	c.CliCertIssuedCond.Message = msg
+
+	c.ReadyCond.Status = kmgmissuerv1beta1.ConditionFalse
 	c.ReadyCond.LastTransitionTime = &now
-	c.ReadyCond.Reason = "IssuerReady"
-	c.ReadyCond.Message = "Bootstrapped issuer successfully"
+	c.ReadyCond.Reason = "InProgress"
+	c.ReadyCond.Message = "Client certificate is being bootstrapped"
 }
 
-func (c *issuerConditions) SetInProgress(msg string) {
+func (c *issuerConditions) SetCliCertError(reason string, err error) {
 	now := metav1.Now()
+	c.CliCertIssuedCond.Status = kmgmissuerv1beta1.ConditionFalse
+	c.CliCertIssuedCond.LastTransitionTime = &now
+	c.CliCertIssuedCond.Reason = reason
+	c.CliCertIssuedCond.Message = err.Error()
+
+	c.ReadyCond.Status = kmgmissuerv1beta1.ConditionFalse
+	c.ReadyCond.LastTransitionTime = &now
+	c.ReadyCond.Reason = "Error"
+	c.ReadyCond.Message = "Client certificate bootstrapping failed"
+}
+
+func (c *issuerConditions) SetCliCertIssued() {
+	if c.CliCertIssuedCond.Status == kmgmissuerv1beta1.ConditionTrue {
+		return
+	}
+
+	now := metav1.Now()
+	c.CliCertIssuedCond.Status = kmgmissuerv1beta1.ConditionTrue
+	c.CliCertIssuedCond.LastTransitionTime = &now
+	c.CliCertIssuedCond.Reason = "CliCertIssued"
+	c.CliCertIssuedCond.Message = "Bootstrapped client certificate successfully"
+}
+
+func (c *issuerConditions) SetPostCliCertInProgress(msg string) {
+	now := metav1.Now()
+
 	c.ReadyCond.Status = kmgmissuerv1beta1.ConditionFalse
 	c.ReadyCond.LastTransitionTime = &now
 	c.ReadyCond.Reason = "InProgress"
 	c.ReadyCond.Message = msg
 }
 
-func (c *issuerConditions) SetErrorState(reason string, err error) {
+func (c *issuerConditions) SetPostCliCertErrorState(reason string, err error) {
 	now := metav1.Now()
 	c.ReadyCond.Status = kmgmissuerv1beta1.ConditionFalse
 	c.ReadyCond.LastTransitionTime = &now
 	c.ReadyCond.Reason = reason
 	c.ReadyCond.Message = err.Error()
+}
+
+func (c *issuerConditions) SetReady() {
+	if c.ReadyCond.Status == kmgmissuerv1beta1.ConditionTrue {
+		return
+	}
+
+	now := metav1.Now()
+	c.ReadyCond.Status = kmgmissuerv1beta1.ConditionTrue
+	c.ReadyCond.LastTransitionTime = &now
+	c.ReadyCond.Reason = "IssuerReady"
+	c.ReadyCond.Message = "Bootstrapped issuer completely"
 }
 
 // +kubebuilder:rbac:groups=kmgm-issuer.coe.ad.jp,resources=issuers,verbs=get;list;watch;create;update;patch;delete
@@ -446,7 +557,7 @@ func (r *IssuerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 		err := fmt.Errorf("Failed to `Get` Issuer resource: %v", err)
 		s.Error(err.Error())
-		return RetryAfterDelay, err
+		return ctrl.Result{}, err
 	}
 
 	conds, res, err := r.ensureIssuerConditions(ctx, &issuer)
@@ -455,15 +566,15 @@ func (r *IssuerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	if res, err := r.pinPubKey(ctx, req, &issuer); err != nil {
-		conds.SetErrorState("PinPubKeyFailure", err)
+		conds.SetCliCertError("PinPubKeyFailure", err)
 
 		if errU := r.Status().Update(ctx, &issuer); errU != nil {
-			return RetryAfterDelay, multierr.Append(err, errU)
+			return ctrl.Result{}, multierr.Append(err, errU)
 		}
 
 		return RetryAfterDelay, err
 	} else if res.Requeue {
-		conds.SetInProgress("Pinned PubKey")
+		conds.SetCliCertInProgress("Pinned PubKey")
 
 		if errU := r.Status().Update(ctx, &issuer); errU != nil {
 			return RetryAfterDelay, errU
@@ -472,7 +583,7 @@ func (r *IssuerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	if res, err := r.reconcileSecret(ctx, req, &issuer); err != nil {
-		conds.SetErrorState("ClientCertificateFailure", err)
+		conds.SetCliCertError("Error", err)
 		err = fmt.Errorf("reconcileSecret failed: %w", err)
 		s.Error(err)
 
@@ -481,7 +592,7 @@ func (r *IssuerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 		return res, err
 	} else if res.Requeue {
-		conds.SetInProgress("Preparing Secret")
+		conds.SetCliCertInProgress("Preparing Secret")
 
 		if errU := r.Status().Update(ctx, &issuer); errU != nil {
 			return RetryAfterDelay, errU
@@ -489,15 +600,17 @@ func (r *IssuerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return res, nil
 	}
 
+	conds.SetCliCertIssued()
+
 	if res, err := r.reconcileConfigMap(ctx, req, &issuer); err != nil {
-		conds.SetErrorState("CACertConfigMapFailure", err)
+		conds.SetPostCliCertErrorState("CACertConfigMapFailure", err)
 
 		if errU := r.Status().Update(ctx, &issuer); errU != nil {
 			return RetryAfterDelay, multierr.Append(err, errU)
 		}
 		return res, err
 	} else if res.Requeue {
-		conds.SetInProgress("Preparing CACertConfigMap")
+		conds.SetPostCliCertInProgress("Preparing CACertConfigMap")
 
 		if errU := r.Status().Update(ctx, &issuer); errU != nil {
 			return RetryAfterDelay, errU

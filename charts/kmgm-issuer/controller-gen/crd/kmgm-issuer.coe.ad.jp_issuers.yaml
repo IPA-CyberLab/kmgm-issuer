@@ -118,6 +118,7 @@ spec:
                       description: IssuerConditionType represents an IssuerCondition's
                         type.
                       enum:
+                      - CliCertIssued
                       - Ready
                       type: string
                   required:

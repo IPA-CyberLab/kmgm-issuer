@@ -40,11 +40,12 @@ type IssuerSpec struct {
 }
 
 // IssuerConditionType represents an IssuerCondition's type.
-// +kubebuilder:validation:Enum=Ready
+// +kubebuilder:validation:Enum=CliCertIssued;Ready
 type IssuerConditionType string
 
 const (
-	IssuerConditionReady IssuerConditionType = "Ready"
+	IssuerConditionCliCertIssued IssuerConditionType = "CliCertIssued"
+	IssuerConditionReady         IssuerConditionType = "Ready"
 )
 
 // ConditionStatus represents a condition's status.
