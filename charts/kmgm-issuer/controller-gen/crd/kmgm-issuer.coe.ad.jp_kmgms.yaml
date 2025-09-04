@@ -42,6 +42,11 @@ spec:
               image:
                 description: Kmgm container image to be deployed to the pods.
                 type: string
+              nodeSelector:
+                additionalProperties:
+                  type: string
+                description: NodeSelector to be enforced on the pods.
+                type: object
             type: object
           status:
             description: KmgmStatus defines the observed state of Kmgm

@@ -24,6 +24,9 @@ import (
 type KmgmSpec struct {
 	// Kmgm container image to be deployed to the pods.
 	Image string `json:"image,omitempty"`
+
+	// NodeSelector to be enforced on the pods.
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Ready

@@ -331,6 +331,7 @@ func makeStatefulSetSpec(kmgm *kmgmissuerv1beta1.Kmgm) appsv1.StatefulSetSpec {
 					},
 				}},
 				TerminationGracePeriodSeconds: ptrint64(30),
+				NodeSelector:                  kmgm.Spec.NodeSelector,
 			},
 		},
 		VolumeClaimTemplates: []corev1.PersistentVolumeClaim{{
