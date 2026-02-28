@@ -46,6 +46,7 @@ import (
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
 	kmgmissuerv1beta1 "github.com/IPA-CyberLab/kmgm-issuer/api/v1beta1"
@@ -58,14 +59,15 @@ func testClient(t *testing.T) *rest.Config {
 	t.Helper()
 	testEnv := &envtest.Environment{
 		CRDDirectoryPaths: []string{
-			filepath.Join("..", "config", "crd"),
-			filepath.Join("..", "test", "testdata", "crd"),
+			filepath.Join("..", "charts", "kmgm-issuer", "controller-gen", "crd"),
+			filepath.Join("..", "test", "crds"),
 		},
 	}
 	t.Cleanup(func() {
 		if err := testEnv.Stop(); err != nil {
 			t.Errorf("testEnv.Stop non-nil err: %v", err)
 		}
+		t.Log("testEnv stopped")
 	})
 
 	var err error
@@ -102,10 +104,11 @@ func RetryUntil(t *testing.T, deadline time.Time, f func() error) {
 	t.Errorf("Failed to satisfy condition: %v", err)
 }
 
-func runManager(ctx context.Context, t *testing.T, cfg *rest.Config, logger *zap.Logger) {
-	mgr, err := ctrl.NewManager(cfg, ctrl.Options{})
+func runManager(ctx context.Context, t *testing.T, cfg *rest.Config, logger *zap.Logger) error {
+	skipNameValidation := true
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{Controller: config.Controller{SkipNameValidation: &skipNameValidation}})
 	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
+		return err
 	}
 	if err := (&controllers.CertificateRequestReconciler{
 		Client: mgr.GetClient(),
@@ -113,21 +116,20 @@ func runManager(ctx context.Context, t *testing.T, cfg *rest.Config, logger *zap
 		ZapLog: logger,
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		t.Fatalf("unexpected err: %v", err)
+		return err
 	}
 	if err := (&controllers.IssuerReconciler{
 		Client: mgr.GetClient(),
 		ZapLog: logger,
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		t.Fatalf("unexpected err: %v", err)
+		return err
 	}
-	go func() {
-		if err := mgr.Start(ctx); err != nil {
-			t.Logf("unexpected err: %v", err)
-		}
-	}()
-	t.Logf("mgr start")
+	if err := mgr.Start(ctx); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 type Env struct {
@@ -142,6 +144,7 @@ func setupEnv(t *testing.T) *Env {
 	logger := testlogger.New()
 	t.Cleanup(func() {
 		if !t.Failed() {
+			t.Logf("🐕🍨 cleaned up cleanly")
 			return
 		}
 		for _, l := range logger.Logs.All() {
@@ -153,7 +156,13 @@ func setupEnv(t *testing.T) *Env {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	runManager(ctx, t, cfg, logger.Logger)
+	joinMgrC := make(chan struct{})
+	go func() {
+		if err := runManager(ctx, t, cfg, logger.Logger); err != nil {
+			t.Errorf("runManager non-nil err: %v", err)
+		}
+		close(joinMgrC)
+	}()
 
 	cli, err := client.New(cfg, client.Options{Scheme: scheme.Scheme})
 	if err != nil {
@@ -165,7 +174,12 @@ func setupEnv(t *testing.T) *Env {
 		logger:     logger,
 		cli:        cli,
 	}
-	t.Cleanup(cancel)
+	t.Cleanup(func() {
+		t.Logf("👧 stopping manager")
+		cancel()
+		<-joinMgrC
+		t.Logf("👧 manager exited")
+	})
 	return e
 }
 
@@ -482,11 +496,10 @@ func TestSpecifyProfile(t *testing.T) {
 	yaml := []byte(`
 noDefault: true
 
-setup:
-  subject:
-    commonName: myCA
-  keyType: ecdsa
-  validity: farfuture
+subject:
+  commonName: myCA
+keyType: ecdsa
+validity: farfuture
 `)
 	logs, err := testkmgm.Run(t, context.Background(), env.testserver.Basedir, yaml, []string{"--profile", "myprofile", "setup"}, testkmgm.NowDefault)
 	testutils.ExpectErr(t, err, nil)

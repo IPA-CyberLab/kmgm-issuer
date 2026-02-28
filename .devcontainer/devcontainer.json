@@ -33,6 +33,7 @@
 	"mounts": [
 		"source=${env:HOME}${env:USERPROFILE}/.kube,target=/home/vscode/.kube,type=bind",
 		"source=${env:HOME}${env:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind,readonly",
+		"source=${env:HOME}${env:USERPROFILE}/worksp/dotfiles/ssh.conf.d,target=/home/vscode/worksp/dotfiles/ssh.conf.d,type=bind,readonly",
 		"source=${env:HOME}${env:USERPROFILE}/worksp/kmgm,target=/workspaces/kmgm,type=bind",
 	],
 	"remoteUser": "vscode"
