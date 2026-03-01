@@ -38,8 +38,10 @@ import (
 	certmanageriov1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	certmanageriometav1 "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -49,6 +51,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	"sigs.k8s.io/yaml"
 
 	kmgmissuerv1beta1 "github.com/IPA-CyberLab/kmgm-issuer/api/v1beta1"
 	"github.com/IPA-CyberLab/kmgm-issuer/controllers"
@@ -158,6 +161,68 @@ type Env struct {
 	testserver *testserver.TestServer
 	logger     *testlogger.TestLogger
 	cli        client.Client
+}
+
+func containersForComparison(containers []corev1.Container) []corev1.Container {
+	ret := make([]corev1.Container, 0, len(containers))
+	for _, c := range containers {
+		ret = append(ret, corev1.Container{
+			Name:  c.Name,
+			Image: c.Image,
+			Args:  c.Args,
+		})
+	}
+	return ret
+}
+
+func volumesForComparison(volumes []corev1.Volume) []corev1.Volume {
+	ret := make([]corev1.Volume, 0, len(volumes))
+	for _, v := range volumes {
+		vv := corev1.Volume{Name: v.Name}
+		if v.Secret != nil {
+			vv.Secret = &corev1.SecretVolumeSource{SecretName: v.Secret.SecretName}
+		}
+		if v.EmptyDir != nil {
+			vv.EmptyDir = &corev1.EmptyDirVolumeSource{}
+		}
+		ret = append(ret, vv)
+	}
+	return ret
+}
+
+func assertKmgmStatefulSetMatchesExpectation(t *testing.T, actual appsv1.StatefulSet, expectedYAML string) {
+	t.Helper()
+
+	var expected appsv1.StatefulSet
+	if err := yaml.Unmarshal([]byte(expectedYAML), &expected); err != nil {
+		t.Fatalf("failed to unmarshal expectation yaml: %v", err)
+	}
+
+	if diff := cmp.Diff(expected.Labels, actual.Labels); diff != "" {
+		t.Errorf("StatefulSet labels mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(expected.Spec.Replicas, actual.Spec.Replicas); diff != "" {
+		t.Errorf("StatefulSet replicas mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(expected.Spec.Selector.MatchLabels, actual.Spec.Selector.MatchLabels); diff != "" {
+		t.Errorf("StatefulSet selector labels mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(expected.Spec.Template.Spec.NodeSelector, actual.Spec.Template.Spec.NodeSelector); diff != "" {
+		t.Errorf("StatefulSet nodeSelector mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(containersForComparison(expected.Spec.Template.Spec.Containers), containersForComparison(actual.Spec.Template.Spec.Containers),
+		cmpopts.SortSlices(func(a, b corev1.Container) bool { return a.Name < b.Name }),
+	); diff != "" {
+		t.Errorf("StatefulSet containers mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(volumesForComparison(expected.Spec.Template.Spec.Volumes), volumesForComparison(actual.Spec.Template.Spec.Volumes),
+		cmpopts.SortSlices(func(a, b corev1.Volume) bool { return a.Name < b.Name }),
+	); diff != "" {
+		t.Errorf("StatefulSet volumes mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(len(expected.Spec.VolumeClaimTemplates), len(actual.Spec.VolumeClaimTemplates)); diff != "" {
+		t.Errorf("StatefulSet volumeClaimTemplates count mismatch (-want +got):\n%s", diff)
+	}
 }
 
 func setupEnv(t *testing.T) *Env {
@@ -645,64 +710,36 @@ func TestKmgmCreatesStatefulSet(t *testing.T) {
 		return nil
 	})
 
-	if sset.Labels["app.kubernetes.io/component"] != "kmgm" {
-		t.Errorf("unexpected StatefulSet label app.kubernetes.io/component: %q", sset.Labels["app.kubernetes.io/component"])
-	}
-	if sset.Labels["app.kubernetes.io/managed-by"] != "kmgm-issuer" {
-		t.Errorf("unexpected StatefulSet label app.kubernetes.io/managed-by: %q", sset.Labels["app.kubernetes.io/managed-by"])
-	}
-	if sset.Labels["kmgm-issuer.coe.ad.jp/kmgm"] != "test-kmgm" {
-		t.Errorf("unexpected StatefulSet label kmgm-issuer.coe.ad.jp/kmgm: %q", sset.Labels["kmgm-issuer.coe.ad.jp/kmgm"])
-	}
-
-	if sset.Spec.Replicas == nil || *sset.Spec.Replicas != 1 {
-		t.Fatalf("unexpected replicas: %#v", sset.Spec.Replicas)
-	}
-	if diff := cmp.Diff(map[string]string{"app.kubernetes.io/component": "kmgm", "kmgm-issuer.coe.ad.jp/kmgm": "test-kmgm"}, sset.Spec.Selector.MatchLabels); diff != "" {
-		t.Errorf("selector labels diff: %s", diff)
-	}
-
-	if len(sset.Spec.Template.Spec.Containers) != 1 {
-		t.Fatalf("unexpected containers count: %d", len(sset.Spec.Template.Spec.Containers))
-	}
-	c := sset.Spec.Template.Spec.Containers[0]
-	if c.Name != "kmgm" {
-		t.Errorf("unexpected container name: %q", c.Name)
-	}
-	if c.Image != "ghcr.io/ipa-cyberlab/kmgm:test" {
-		t.Errorf("unexpected container image: %q", c.Image)
-	}
-	if diff := cmp.Diff([]string{"serve", "--bootstrap-token-file", "/etc/kmgm-token/token", "--expose-metrics"}, c.Args); diff != "" {
-		t.Errorf("container args diff: %s", diff)
-	}
-
-	if diff := cmp.Diff(map[string]string{"node-role.kubernetes.io/test": "true"}, sset.Spec.Template.Spec.NodeSelector); diff != "" {
-		t.Errorf("nodeSelector diff: %s", diff)
-	}
-
-	if len(sset.Spec.VolumeClaimTemplates) != 0 {
-		t.Errorf("unexpected volumeClaimTemplates count: %d", len(sset.Spec.VolumeClaimTemplates))
-	}
-	hasTokenVol := false
-	hasProfileVol := false
-	for _, v := range sset.Spec.Template.Spec.Volumes {
-		switch v.Name {
-		case "token-vol":
-			hasTokenVol = true
-			if v.Secret == nil || v.Secret.SecretName != "test-kmgm-kmgm-bootstrap" {
-				t.Errorf("unexpected token-vol secret ref: %#v", v.Secret)
-			}
-		case "profile-vol":
-			hasProfileVol = true
-			if v.EmptyDir == nil {
-				t.Errorf("profile-vol should be EmptyDir")
-			}
-		}
-	}
-	if !hasTokenVol {
-		t.Error("token-vol not found")
-	}
-	if !hasProfileVol {
-		t.Error("profile-vol not found")
-	}
+	assertKmgmStatefulSetMatchesExpectation(t, sset, `
+metadata:
+  labels:
+    app.kubernetes.io/component: kmgm
+    app.kubernetes.io/managed-by: kmgm-issuer
+    kmgm-issuer.coe.ad.jp/kmgm: test-kmgm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: kmgm
+      kmgm-issuer.coe.ad.jp/kmgm: test-kmgm
+  template:
+    spec:
+      containers:
+        - name: kmgm
+          image: ghcr.io/ipa-cyberlab/kmgm:test
+          args:
+            - serve
+            - --bootstrap-token-file
+            - /etc/kmgm-token/token
+            - --expose-metrics
+      nodeSelector:
+        node-role.kubernetes.io/test: "true"
+      volumes:
+        - name: token-vol
+          secret:
+            secretName: test-kmgm-kmgm-bootstrap
+        - name: profile-vol
+          emptyDir: {}
+  volumeClaimTemplates: []
+`)
 }
