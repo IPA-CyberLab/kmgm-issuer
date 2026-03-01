@@ -17,8 +17,21 @@ limitations under the License.
 package v1beta1
 
 import (
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+// StorageSpec defines the configured storage for the Kmgm instance.
+// If no storage is specified, the Kmgm instance will use an emptyDir volume.
+type StorageSpec struct {
+	// If specified it takes precedence over `volumeClaimTemplate`.
+	// +optional
+	EmptyDir *v1.EmptyDirVolumeSource `json:"emptyDir,omitempty"`
+
+	// If specified it takes precedence over `emptyDir`.
+	// +optional
+	VolumeClaimTemplate *v1.PersistentVolumeClaimSpec `json:"volumeClaimTemplate,omitempty"`
+}
 
 // KmgmSpec defines the desired state of Kmgm
 type KmgmSpec struct {
@@ -27,6 +40,10 @@ type KmgmSpec struct {
 
 	// NodeSelector to be enforced on the pods.
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// Storage defines the storage configuration for Kmgm.
+	// +optional
+	Storage *StorageSpec `json:"storage,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Ready
