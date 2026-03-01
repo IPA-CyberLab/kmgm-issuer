@@ -43,6 +43,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -686,42 +687,50 @@ func TestKmgmCreatesStatefulSet(t *testing.T) {
 		t.Fatalf("unexpected err: %v", err)
 	}
 
-	kmgm := &kmgmissuerv1beta1.Kmgm{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-kmgm",
-			Namespace: "default",
-		},
-		Spec: kmgmissuerv1beta1.KmgmSpec{
-			Image: "ghcr.io/ipa-cyberlab/kmgm:test",
-			NodeSelector: map[string]string{
-				"node-role.kubernetes.io/test": "true",
-			},
-		},
-	}
-	if err := cli.Create(ctx, kmgm); err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
+	assertStatefulSetCreatedAsExpected := func(t *testing.T, kmgm *kmgmissuerv1beta1.Kmgm, expectedYAML string) {
+		t.Helper()
 
-	var sset appsv1.StatefulSet
-	RetryUntil(t, time.Now().Add(20*time.Second), func() error {
-		if err := cli.Get(ctx, types.NamespacedName{Namespace: "default", Name: "test-kmgm-kmgm-instance"}, &sset); err != nil {
-			return err
+		if err := cli.Create(ctx, kmgm); err != nil {
+			t.Fatalf("unexpected err: %v", err)
 		}
-		return nil
-	})
 
-	assertKmgmStatefulSetMatchesExpectation(t, sset, `
+		var sset appsv1.StatefulSet
+		RetryUntil(t, time.Now().Add(20*time.Second), func() error {
+			if err := cli.Get(ctx, types.NamespacedName{Namespace: "default", Name: kmgm.Name + "-kmgm-instance"}, &sset); err != nil {
+				return err
+			}
+			return nil
+		})
+
+		assertKmgmStatefulSetMatchesExpectation(t, sset, expectedYAML)
+	}
+
+	t.Run("emptyDir", func(t *testing.T) {
+		kmgm := &kmgmissuerv1beta1.Kmgm{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-kmgm-emptydir",
+				Namespace: "default",
+			},
+			Spec: kmgmissuerv1beta1.KmgmSpec{
+				Image: "ghcr.io/ipa-cyberlab/kmgm:test",
+				NodeSelector: map[string]string{
+					"node-role.kubernetes.io/test": "true",
+				},
+			},
+		}
+
+		assertStatefulSetCreatedAsExpected(t, kmgm, `
 metadata:
   labels:
     app.kubernetes.io/component: kmgm
     app.kubernetes.io/managed-by: kmgm-issuer
-    kmgm-issuer.coe.ad.jp/kmgm: test-kmgm
+    kmgm-issuer.coe.ad.jp/kmgm: test-kmgm-emptydir
 spec:
   replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/component: kmgm
-      kmgm-issuer.coe.ad.jp/kmgm: test-kmgm
+      kmgm-issuer.coe.ad.jp/kmgm: test-kmgm-emptydir
   template:
     spec:
       containers:
@@ -737,9 +746,74 @@ spec:
       volumes:
         - name: token-vol
           secret:
-            secretName: test-kmgm-kmgm-bootstrap
+            secretName: test-kmgm-emptydir-kmgm-bootstrap
         - name: profile-vol
           emptyDir: {}
   volumeClaimTemplates: []
 `)
+	})
+
+	t.Run("pvc", func(t *testing.T) {
+		kmgm := &kmgmissuerv1beta1.Kmgm{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-kmgm-pvc",
+				Namespace: "default",
+			},
+			Spec: kmgmissuerv1beta1.KmgmSpec{
+				Image: "ghcr.io/ipa-cyberlab/kmgm:test",
+				NodeSelector: map[string]string{
+					"node-role.kubernetes.io/test": "pvc",
+				},
+				Storage: &kmgmissuerv1beta1.StorageSpec{
+					VolumeClaimTemplate: &corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse("1Gi"),
+							},
+						},
+					},
+				},
+			},
+		}
+
+		assertStatefulSetCreatedAsExpected(t, kmgm, `
+metadata:
+  labels:
+    app.kubernetes.io/component: kmgm
+    app.kubernetes.io/managed-by: kmgm-issuer
+    kmgm-issuer.coe.ad.jp/kmgm: test-kmgm-pvc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: kmgm
+      kmgm-issuer.coe.ad.jp/kmgm: test-kmgm-pvc
+  template:
+    spec:
+      containers:
+        - name: kmgm
+          image: ghcr.io/ipa-cyberlab/kmgm:test
+          args:
+            - serve
+            - --bootstrap-token-file
+            - /etc/kmgm-token/token
+            - --expose-metrics
+      nodeSelector:
+        node-role.kubernetes.io/test: "pvc"
+      volumes:
+        - name: token-vol
+          secret:
+            secretName: test-kmgm-pvc-kmgm-bootstrap
+  volumeClaimTemplates:
+    - metadata:
+        name: profile-vol
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi
+`)
+	})
 }
