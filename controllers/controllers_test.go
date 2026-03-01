@@ -39,6 +39,7 @@ import (
 	certmanageriometav1 "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
+	appsv1 "k8s.io/api/apps/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -120,6 +121,27 @@ func runManager(ctx context.Context, t *testing.T, cfg *rest.Config, logger *zap
 	}
 	if err := (&controllers.IssuerReconciler{
 		Client: mgr.GetClient(),
+		ZapLog: logger,
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		return err
+	}
+	if err := mgr.Start(ctx); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func runKmgmManager(ctx context.Context, cfg *rest.Config, logger *zap.Logger) error {
+	skipNameValidation := true
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{Controller: config.Controller{SkipNameValidation: &skipNameValidation}})
+	if err != nil {
+		return err
+	}
+	if err := (&controllers.KmgmReconciler{
+		Client: mgr.GetClient(),
+		Log:    ctrl.Log.WithName("controllers").WithName("Kmgm"),
 		ZapLog: logger,
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
@@ -572,5 +594,115 @@ func TestCertificateRequestBeforeIssuer(t *testing.T) {
 
 	if cert.Subject.String() != "CN=testcn,O=testorg,C=JP" {
 		t.Errorf("Unexpected Subject: %v", cert.Subject)
+	}
+}
+
+func TestKmgmCreatesStatefulSet(t *testing.T) {
+	ctx := context.Background()
+	logger := testlogger.New()
+
+	cfg := testClient(t)
+
+	mgrCtx, cancel := context.WithCancel(context.Background())
+	joinMgrC := make(chan struct{})
+	go func() {
+		if err := runKmgmManager(mgrCtx, cfg, logger.Logger); err != nil {
+			t.Errorf("runKmgmManager non-nil err: %v", err)
+		}
+		close(joinMgrC)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-joinMgrC
+	})
+
+	cli, err := client.New(cfg, client.Options{Scheme: scheme.Scheme})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+
+	kmgm := &kmgmissuerv1beta1.Kmgm{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-kmgm",
+			Namespace: "default",
+		},
+		Spec: kmgmissuerv1beta1.KmgmSpec{
+			Image: "ghcr.io/ipa-cyberlab/kmgm:test",
+			NodeSelector: map[string]string{
+				"node-role.kubernetes.io/test": "true",
+			},
+		},
+	}
+	if err := cli.Create(ctx, kmgm); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+
+	var sset appsv1.StatefulSet
+	RetryUntil(t, time.Now().Add(20*time.Second), func() error {
+		if err := cli.Get(ctx, types.NamespacedName{Namespace: "default", Name: "test-kmgm-kmgm-instance"}, &sset); err != nil {
+			return err
+		}
+		return nil
+	})
+
+	if sset.Labels["app.kubernetes.io/component"] != "kmgm" {
+		t.Errorf("unexpected StatefulSet label app.kubernetes.io/component: %q", sset.Labels["app.kubernetes.io/component"])
+	}
+	if sset.Labels["app.kubernetes.io/managed-by"] != "kmgm-issuer" {
+		t.Errorf("unexpected StatefulSet label app.kubernetes.io/managed-by: %q", sset.Labels["app.kubernetes.io/managed-by"])
+	}
+	if sset.Labels["kmgm-issuer.coe.ad.jp/kmgm"] != "test-kmgm" {
+		t.Errorf("unexpected StatefulSet label kmgm-issuer.coe.ad.jp/kmgm: %q", sset.Labels["kmgm-issuer.coe.ad.jp/kmgm"])
+	}
+
+	if sset.Spec.Replicas == nil || *sset.Spec.Replicas != 1 {
+		t.Fatalf("unexpected replicas: %#v", sset.Spec.Replicas)
+	}
+	if diff := cmp.Diff(map[string]string{"app.kubernetes.io/component": "kmgm", "kmgm-issuer.coe.ad.jp/kmgm": "test-kmgm"}, sset.Spec.Selector.MatchLabels); diff != "" {
+		t.Errorf("selector labels diff: %s", diff)
+	}
+
+	if len(sset.Spec.Template.Spec.Containers) != 1 {
+		t.Fatalf("unexpected containers count: %d", len(sset.Spec.Template.Spec.Containers))
+	}
+	c := sset.Spec.Template.Spec.Containers[0]
+	if c.Name != "kmgm" {
+		t.Errorf("unexpected container name: %q", c.Name)
+	}
+	if c.Image != "ghcr.io/ipa-cyberlab/kmgm:test" {
+		t.Errorf("unexpected container image: %q", c.Image)
+	}
+	if diff := cmp.Diff([]string{"serve", "--bootstrap-token-file", "/etc/kmgm-token/token", "--expose-metrics"}, c.Args); diff != "" {
+		t.Errorf("container args diff: %s", diff)
+	}
+
+	if diff := cmp.Diff(map[string]string{"node-role.kubernetes.io/test": "true"}, sset.Spec.Template.Spec.NodeSelector); diff != "" {
+		t.Errorf("nodeSelector diff: %s", diff)
+	}
+
+	if len(sset.Spec.VolumeClaimTemplates) != 0 {
+		t.Errorf("unexpected volumeClaimTemplates count: %d", len(sset.Spec.VolumeClaimTemplates))
+	}
+	hasTokenVol := false
+	hasProfileVol := false
+	for _, v := range sset.Spec.Template.Spec.Volumes {
+		switch v.Name {
+		case "token-vol":
+			hasTokenVol = true
+			if v.Secret == nil || v.Secret.SecretName != "test-kmgm-kmgm-bootstrap" {
+				t.Errorf("unexpected token-vol secret ref: %#v", v.Secret)
+			}
+		case "profile-vol":
+			hasProfileVol = true
+			if v.EmptyDir == nil {
+				t.Errorf("profile-vol should be EmptyDir")
+			}
+		}
+	}
+	if !hasTokenVol {
+		t.Error("token-vol not found")
+	}
+	if !hasProfileVol {
+		t.Error("profile-vol not found")
 	}
 }
