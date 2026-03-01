@@ -247,7 +247,7 @@ func k8s2pbKeyType(k8s kmgmissuerv1beta1.KmgmKeyType) pb.KeyType {
 	}
 }
 
-func (r *KmgmProfileReconciler) ensureCA(ctx context.Context, p *kmgmissuerv1beta1.KmgmProfile, kmgm *kmgmissuerv1beta1.Kmgm, issuer *kmgmissuerv1beta1.Issuer) (ctrl.Result, error) {
+func (r *KmgmProfileReconciler) ensureCA(ctx context.Context, p *kmgmissuerv1beta1.KmgmProfile, issuer *kmgmissuerv1beta1.Issuer) (ctrl.Result, error) {
 	nn := types.NamespacedName{Namespace: p.Namespace, Name: p.Name}
 	s := r.ZapLog.With(zap.Any("kmgmProfile", nn)).Sugar()
 
@@ -384,7 +384,7 @@ func (r *KmgmProfileReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// is not reached, since CASetupFailure: "Issuer "htdi" is not ready".
-	if res, err := r.ensureCA(ctx, &p, &kmgm, issuer); err != nil {
+	if res, err := r.ensureCA(ctx, &p, issuer); err != nil {
 		conds.SetCASetupError(err)
 		if errU := r.Status().Update(ctx, &p); errU != nil {
 			return RetryAfterDelay, multierr.Append(err, errU)

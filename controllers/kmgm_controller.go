@@ -29,7 +29,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -255,8 +254,6 @@ func (r *KmgmReconciler) reconcileSecret(ctx context.Context, kmgm *kmgmissuerv1
 	return ctrl.Result{Requeue: true}, nil
 }
 
-var persistentVolumeFilesystem = corev1.PersistentVolumeFilesystem
-
 func podMatchLabels(kmgm *kmgmissuerv1beta1.Kmgm) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/component": "kmgm",
@@ -264,8 +261,32 @@ func podMatchLabels(kmgm *kmgmissuerv1beta1.Kmgm) map[string]string {
 	}
 }
 
+func makeProfileStorageSpec(kmgm *kmgmissuerv1beta1.Kmgm) ([]corev1.Volume, []corev1.PersistentVolumeClaim) {
+	if kmgm.Spec.Storage == nil || kmgm.Spec.Storage.VolumeClaimTemplate == nil {
+		emptyDir := &corev1.EmptyDirVolumeSource{}
+		if kmgm.Spec.Storage != nil && kmgm.Spec.Storage.EmptyDir != nil {
+			emptyDir = kmgm.Spec.Storage.EmptyDir.DeepCopy()
+		}
+
+		return []corev1.Volume{{
+			Name: "profile-vol",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: emptyDir,
+			},
+		}}, nil
+	}
+
+	return nil, []corev1.PersistentVolumeClaim{{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "profile-vol",
+		},
+		Spec: *kmgm.Spec.Storage.VolumeClaimTemplate.DeepCopy(),
+	}}
+}
+
 func makeStatefulSetSpec(kmgm *kmgmissuerv1beta1.Kmgm) appsv1.StatefulSetSpec {
 	sn := bootstrapSecretNameFromKmgmName(types.NamespacedName{Namespace: kmgm.Namespace, Name: kmgm.Name})
+	profileVolumes, profileVolumeClaimTemplates := makeProfileStorageSpec(kmgm)
 
 	matchLabels := podMatchLabels(kmgm)
 	nonMatchLabels := map[string]string{
@@ -322,36 +343,19 @@ func makeStatefulSetSpec(kmgm *kmgmissuerv1beta1.Kmgm) appsv1.StatefulSetSpec {
 					},
 					ImagePullPolicy: corev1.PullIfNotPresent,
 				}},
-				Volumes: []corev1.Volume{{
+				Volumes: append([]corev1.Volume{{
 					Name: "token-vol",
 					VolumeSource: corev1.VolumeSource{
 						Secret: &corev1.SecretVolumeSource{
 							SecretName: sn.Name,
 						},
 					},
-				}},
+				}}, profileVolumes...),
 				TerminationGracePeriodSeconds: ptrint64(30),
 				NodeSelector:                  kmgm.Spec.NodeSelector,
 			},
 		},
-		VolumeClaimTemplates: []corev1.PersistentVolumeClaim{{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "PersistentVolumeClaim",
-				APIVersion: "v1",
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "profile-vol",
-			},
-			Spec: corev1.PersistentVolumeClaimSpec{
-				AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-				Resources: corev1.VolumeResourceRequirements{
-					Requests: corev1.ResourceList{
-						"storage": *resource.NewQuantity(104857600, resource.BinarySI),
-					},
-				},
-				VolumeMode: &persistentVolumeFilesystem,
-			}},
-		},
+		VolumeClaimTemplates: profileVolumeClaimTemplates,
 		UpdateStrategy: appsv1.StatefulSetUpdateStrategy{
 			Type:          appsv1.RollingUpdateStatefulSetStrategyType,
 			RollingUpdate: &appsv1.RollingUpdateStatefulSetStrategy{},
