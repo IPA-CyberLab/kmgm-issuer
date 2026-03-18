@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kmgmissuerv1beta1 "github.com/IPA-CyberLab/kmgm-issuer/api/v1beta1"
+	"github.com/IPA-CyberLab/kmgm/remote"
 	"github.com/IPA-CyberLab/kmgm/wcrypto"
 )
 
@@ -537,6 +538,42 @@ func (r *KmgmReconciler) reconcileService(ctx context.Context, kmgm *kmgmissuerv
 	return ctrl.Result{}, nil
 }
 
+func (r *KmgmReconciler) reconcilePubKey(ctx context.Context, kmgm *kmgmissuerv1beta1.Kmgm) (ctrl.Result, error) {
+	if kmgm.Status.Pubkey != "" {
+		return ctrl.Result{}, nil
+	}
+
+	nn := types.NamespacedName{Namespace: kmgm.Namespace, Name: kmgm.Name}
+	s := r.ZapLog.Sugar().Named("KmgmReconciler.reconcilePubKey").With("kmgm", nn.String())
+
+	secretName := bootstrapSecretNameFromKmgmName(nn)
+	var bootstrapSecret corev1.Secret
+	if err := r.Client.Get(ctx, secretName, &bootstrapSecret); err != nil {
+		return RetryAfterDelay, fmt.Errorf("failed to get bootstrap secret: %w", err)
+	}
+	tokenbs := bootstrapSecret.Data["token"]
+	if len(tokenbs) == 0 {
+		return RetryAfterDelay, fmt.Errorf("bootstrap token not yet available in secret %v", secretName)
+	}
+
+	svcName := serviceNameFromKmgmName(nn)
+	hostPort := fmt.Sprintf("%s.%s.svc:34680", svcName.Name, svcName.Namespace)
+	cinfo := &remote.ConnectionInfo{
+		HostPort:      hostPort,
+		AllowInsecure: true,
+		AccessToken:   string(tokenbs),
+	}
+
+	pubkey, err := fetchServerPubKey(ctx, cinfo, r.ZapLog)
+	if err != nil {
+		return RetryAfterDelay, err
+	}
+	kmgm.Status.Pubkey = pubkey
+
+	s.Infof("Pinned kmgm server pubkey: %s", kmgm.Status.Pubkey)
+	return RetryAfterDelay, nil
+}
+
 // +kubebuilder:rbac:groups=kmgm-issuer.coe.ad.jp,resources=kmgms,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kmgm-issuer.coe.ad.jp,resources=kmgms/status,verbs=get;update;patch
 
@@ -601,6 +638,21 @@ func (r *KmgmReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			return ctrl.Result{}, errU
 		}
 
+		return res, nil
+	}
+
+	if res, err := r.reconcilePubKey(ctx, &kmgm); err != nil {
+		conds.SetErrorState("PubKeyFailure", err)
+
+		if errU := r.Status().Update(ctx, &kmgm); errU != nil {
+			return ctrl.Result{}, multierr.Append(err, errU)
+		}
+		return RetryAfterDelay, err
+	} else if res.RequeueAfter != 0 {
+		conds.SetInProgress("Pinning PubKey")
+		if errU := r.Status().Update(ctx, &kmgm); errU != nil {
+			return ctrl.Result{}, errU
+		}
 		return res, nil
 	}
 

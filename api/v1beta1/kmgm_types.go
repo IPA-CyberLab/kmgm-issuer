@@ -78,6 +78,9 @@ type KmgmCondition struct {
 
 // KmgmStatus defines the observed state of Kmgm
 type KmgmStatus struct {
+	// Pubkey is the public key hash of the Kmgm gRPC server CA
+	Pubkey string `json:"pubkey,omitempty"`
+
 	Conditions []KmgmCondition `json:"conditions,omitempty"`
 }
 

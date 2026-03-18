@@ -312,6 +312,10 @@ spec:
                   - type
                   type: object
                 type: array
+              pubkey:
+                description: Pubkey is the public key hash of the Kmgm gRPC server
+                  CA
+                type: string
             type: object
         type: object
     served: true

@@ -173,6 +173,29 @@ func GetIssuerConnectionInfo(ctx context.Context, c client.Client, issuer *kmgmi
 	return cinfo, nil
 }
 
+// fetchServerPubKey dials the kmgm server described by cinfo, verifies it with
+// GetVersion, and returns the SHA-256 hash of the server's TLS certificate.
+func fetchServerPubKey(ctx context.Context, cinfo *remote.ConnectionInfo, zapLog *zap.Logger) (string, error) {
+	conn, pubkeys, err := cinfo.DialPubKeys(ctx, zapLog)
+	if err != nil {
+		return "", fmt.Errorf("failed to dial kmgm instance: %w", err)
+	}
+	defer conn.Close()
+
+	sc := pb.NewVersionServiceClient(conn)
+	resp, err := sc.GetVersion(ctx, &pb.GetVersionRequest{})
+	if err != nil {
+		return "", fmt.Errorf("GetVersion gRPC failure: %w", err)
+	}
+
+	zapLog.Sugar().Infof("kmgm server version: %s, commit: %s", resp.Version, resp.Commit)
+
+	for pubkey := range pubkeys {
+		return pubkey, nil
+	}
+	return "", fmt.Errorf("no pubkeys received from kmgm server")
+}
+
 func (r *IssuerReconciler) pinPubKey(ctx context.Context, req ctrl.Request, issuer *kmgmissuerv1beta1.Issuer) (ctrl.Result, error) {
 	s := r.ZapLog.With(zap.Any("issuer", req.NamespacedName)).Sugar()
 
@@ -195,25 +218,11 @@ func (r *IssuerReconciler) pinPubKey(ctx context.Context, req ctrl.Request, issu
 			AllowInsecure: true,
 			AccessToken:   token,
 		}
-		conn, pubkeys, err := cinfo.DialPubKeys(ctx, r.ZapLog)
+		pubkey, err := fetchServerPubKey(ctx, cinfo, r.ZapLog)
 		if err != nil {
-			return RetryAfterDelay, fmt.Errorf("Failed to dial kmgm instance: %w", err)
+			return RetryAfterDelay, err
 		}
-		defer conn.Close()
-
-		sc := pb.NewVersionServiceClient(conn)
-		resp, err := sc.GetVersion(ctx, &pb.GetVersionRequest{})
-		if err != nil {
-			return RetryAfterDelay, fmt.Errorf("GetVersion gRPC failure: %v", err)
-		}
-
-		s.Infof("kmgm server version: %s, commit: %s", resp.Version, resp.Commit)
-
-		// Take first pubkey from `pubkeys`.
-		for pubkey := range pubkeys {
-			issuer.Status.PubKey = pubkey
-			break
-		}
+		issuer.Status.PubKey = pubkey
 	}
 
 	s.Info("Requeuing after pinning kmgm server pubkey")
