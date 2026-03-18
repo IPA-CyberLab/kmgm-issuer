@@ -261,7 +261,7 @@ func podMatchLabels(kmgm *kmgmissuerv1beta1.Kmgm) map[string]string {
 	}
 }
 
-func makeProfileStorageSpec(kmgm *kmgmissuerv1beta1.Kmgm) ([]corev1.Volume, []corev1.PersistentVolumeClaim) {
+func makeProfileStorageSpec(kmgm *kmgmissuerv1beta1.Kmgm) ([]corev1.Volume, []corev1.PersistentVolumeClaim, error) {
 	if kmgm.Spec.Storage == nil || kmgm.Spec.Storage.VolumeClaimTemplate == nil {
 		emptyDir := &corev1.EmptyDirVolumeSource{}
 		if kmgm.Spec.Storage != nil && kmgm.Spec.Storage.EmptyDir != nil {
@@ -273,20 +273,42 @@ func makeProfileStorageSpec(kmgm *kmgmissuerv1beta1.Kmgm) ([]corev1.Volume, []co
 			VolumeSource: corev1.VolumeSource{
 				EmptyDir: emptyDir,
 			},
-		}}, nil
+		}}, nil, nil
 	}
 
-	return nil, []corev1.PersistentVolumeClaim{{
+	profileVol := corev1.Volume{
+		Name: "profile-vol",
+		VolumeSource: corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+				ClaimName: "profile-vol",
+			},
+		},
+	}
+
+	claim := kmgm.Spec.Storage.VolumeClaimTemplate
+	if len(claim.AccessModes) == 0 {
+		return nil, nil, fmt.Errorf("VolumeClaimTemplate must specify at least one AccessMode")
+	}
+	if claim.Resources.Requests == nil || claim.Resources.Requests.Storage().IsZero() {
+		return nil, nil, fmt.Errorf("VolumeClaimTemplate must specify storage resource request")
+	}
+
+	profileClaim := corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "profile-vol",
 		},
-		Spec: *kmgm.Spec.Storage.VolumeClaimTemplate.DeepCopy(),
-	}}
+	}
+	claim.DeepCopyInto(&profileClaim.Spec)
+
+	return []corev1.Volume{profileVol}, []corev1.PersistentVolumeClaim{profileClaim}, nil
 }
 
-func makeStatefulSetSpec(kmgm *kmgmissuerv1beta1.Kmgm) appsv1.StatefulSetSpec {
+func makeStatefulSetSpec(kmgm *kmgmissuerv1beta1.Kmgm) (appsv1.StatefulSetSpec, error) {
 	sn := bootstrapSecretNameFromKmgmName(types.NamespacedName{Namespace: kmgm.Namespace, Name: kmgm.Name})
-	profileVolumes, profileVolumeClaimTemplates := makeProfileStorageSpec(kmgm)
+	profileVolumes, profileVolumeClaimTemplates, err := makeProfileStorageSpec(kmgm)
+	if err != nil {
+		return appsv1.StatefulSetSpec{}, err
+	}
 
 	matchLabels := podMatchLabels(kmgm)
 	nonMatchLabels := map[string]string{
@@ -318,10 +340,17 @@ func makeStatefulSetSpec(kmgm *kmgmissuerv1beta1.Kmgm) appsv1.StatefulSetSpec {
 						ContainerPort: 34680,
 						Protocol:      corev1.ProtocolTCP,
 					}},
-					Env: []corev1.EnvVar{{
-						Name:  "KMGMDIR",
-						Value: "/var/lib/kmgm",
-					}},
+					Env: []corev1.EnvVar{
+						{
+							Name:  "KMGMDIR",
+							Value: "/var/lib/kmgm",
+						},
+						{
+							// kmgm expects this to be present to determine default basedir
+							Name:  "USER",
+							Value: "kmgm",
+						},
+					},
 					VolumeMounts: []corev1.VolumeMount{
 						{
 							Name:      "profile-vol",
@@ -353,6 +382,10 @@ func makeStatefulSetSpec(kmgm *kmgmissuerv1beta1.Kmgm) appsv1.StatefulSetSpec {
 				}}, profileVolumes...),
 				TerminationGracePeriodSeconds: ptrint64(30),
 				NodeSelector:                  kmgm.Spec.NodeSelector,
+				SecurityContext: &corev1.PodSecurityContext{
+					RunAsUser:  ptrint64(1000),
+					RunAsGroup: ptrint64(1000),
+				},
 			},
 		},
 		VolumeClaimTemplates: profileVolumeClaimTemplates,
@@ -360,7 +393,7 @@ func makeStatefulSetSpec(kmgm *kmgmissuerv1beta1.Kmgm) appsv1.StatefulSetSpec {
 			Type:          appsv1.RollingUpdateStatefulSetStrategyType,
 			RollingUpdate: &appsv1.RollingUpdateStatefulSetStrategy{},
 		},
-	}
+	}, nil
 }
 
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;delete
@@ -395,7 +428,11 @@ func (r *KmgmReconciler) reconcileStatefulSet(ctx context.Context, kmgm *kmgmiss
 			},
 			// FIXME: copy labels+annotations (but maybe not those w/ kubectl.kubernetes.io: https://github.com/prometheus-operator/prometheus-operator/blob/16dfbf448ff439907daaa8c58a3b388e1060106f/pkg/alertmanager/statefulset.go#L125)
 		}
-		sset.Spec = makeStatefulSetSpec(kmgm)
+		sset.Spec, err = makeStatefulSetSpec(kmgm)
+		if err != nil {
+			l.Error(err, "failed to make statefulset spec")
+			return ctrl.Result{}, err
+		}
 
 		if err := ctrl.SetControllerReference(kmgm, &sset, r.Scheme); err != nil {
 			l.Error(err, "unable to set statefulset's controller ref")
@@ -407,7 +444,11 @@ func (r *KmgmReconciler) reconcileStatefulSet(ctx context.Context, kmgm *kmgmiss
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	newSpec := makeStatefulSetSpec(kmgm)
+	newSpec, err := makeStatefulSetSpec(kmgm)
+	if err != nil {
+		l.Error(err, "failed to make statefulset spec")
+		return ctrl.Result{}, err
+	}
 	diff := cmp.Diff(&newSpec, &sset.Spec)
 	if diff == "" {
 		// Nothing to do.
